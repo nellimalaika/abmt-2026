@@ -114,7 +114,13 @@ def read_population(boundary):
                     }
                     break
 
-            if attrs.get("isFreight", "false").lower() == "true" or attrs.get("isOutside", "false").lower() == "true":
+            external = any(
+                str(attrs.get(flag, "")).strip().lower() in ("true", "yes", "1")
+                for flag in ("isFreight", "isOutside", "isCrossBorder", "isExternalFR")
+            ) or str(attrs.get("subpopulation", "")).strip().lower() in (
+                "outside", "freight", "crossborder"
+            )
+            if external:
                 root.clear()
                 continue
 

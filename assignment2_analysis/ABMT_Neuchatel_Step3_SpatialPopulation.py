@@ -125,9 +125,11 @@ def read_population(boundary):
 
             details = attributes(person)
             excluded = any(
-                details.get(name, "false").lower() == "true"
-                for name in ("isFreight", "isOutside", "isCrossBorder", "isExternalFR")
-            ) or details.get("subpopulation", "").lower() in ("freight", "crossborder")
+                str(details.get(flag, "")).strip().lower() in ("true", "yes", "1")
+                for flag in ("isFreight", "isOutside", "isCrossBorder", "isExternalFR")
+            ) or str(details.get("subpopulation", "")).strip().lower() in (
+                "outside", "freight", "crossborder"
+            )
             if not excluded:
                 x = as_number(details.get("home_x"))
                 y = as_number(details.get("home_y"))
