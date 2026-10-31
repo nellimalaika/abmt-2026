@@ -72,7 +72,7 @@ Run from this directory using `python ABMT_Neuchatel_StepN_*.py` with the correc
 
 ## Repository and privacy
 
-`abmt-2026` is currently a **public repository**. Keep `Boundary/`, `microcensus/`, `Neuchatel_10pct/`, any confidential outputs, and any individual-level or station-level records **outside the Git repository**. Only copy this code directory into the checkout.
+Regardless of whether the repository is public or private, keep `Boundary/`, `microcensus/`, `Neuchatel_10pct/`, any confidential outputs, and any individual-level or station-level records **outside the Git repository**. Only copy this code directory into the checkout.
 
 The `.gitignore` in this directory protects `results/`, CSV, XML, archives, geodata, plots and caches. It does not retroactively remove files that may already have been tracked. Check the staged files before committing:
 
@@ -84,7 +84,7 @@ git diff --cached --name-only
 
 The staged list should contain only `.py`, `.md`, `requirements.txt` and `.gitignore` under `assignment2_analysis/`. If you see original data files or generated results, **stop before committing** and unstage them. Do not run `git add -f` on ignored files. Do not commit results even if they appear anonymized without checking the applicable course/data-sharing policy.
 
-Existing root-level `README.md` and `.gitignore` are deliberately **not included or overwritten**.
+The repository root contains a separate overview `README.md`; this file documents the analysis details. The root `.gitignore` is managed separately.
 
 ## Sources
 
