@@ -380,8 +380,10 @@ def geh_from_eqasim_calibration(sim, out, configfile, mods, daily):
         matched = merged.merge(lanes, on="link_id", validate="one_to_one")
         if matched.empty:
             return False
-        matched["observed"] = matched.reference_hourly_per_lane * matched.lanes
-        matched["simulated"] = matched.raw_sample_volume / (hours * sample)
+        matched["observed"] = matched["reference_hourly_per_lane"]
+        matched["simulated"] = matched["raw_sample_volume"] / (
+            hours * sample * matched["lanes"].clip(lower=1.0)
+        )
         matched = matched[(matched.observed > 0) & (matched.simulated >= 0)]
         if matched.empty:
             return False
