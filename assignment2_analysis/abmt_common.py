@@ -27,7 +27,7 @@ import _abmt_trips as trips
 import _abmt_chains as chains
 import _abmt_visits as visits
 
-VERSION = 'Neuchatel reconciled 2026-11-05 v1.1'
+VERSION = 'Neuchatel reconciled 2026-11-05 v1.2'
 OUT = Path(__file__).resolve().parent/'results'
 AGE_GROUPS = ['6-17','18-34','35-64','65+']
 MODES = ['car','car_passenger','pt','bike','walk']
@@ -49,6 +49,8 @@ METHOD = {
  'destinations':'Arrivals at known non-home activities inside; initial activities excluded; origin may be outside; repeats count repeatedly.',
  'road':'All traffic at eligible inside-midpoint target links; average-hourly whole-link GEH primary, per-lane supplementary; event counts checked against supplied daily counts.',
  'pt':'Simulated passenger activity and timetable adherence are separate diagnostics, not validation against observed passenger demand or punctuality.',
+ 'pt_subscriptions':'All eligible residents; WP vs weight 1; generator-compatible groups and literal three-item sensitivity retain unknowns. Product groups do not imply identical fare rights.',
+ 'pt_accessibility_common':'Actual homes assigned to identical pinned ARE 2015 polygons in EPSG:2056, covers and best grade. Common-reference residential-location comparison, not current or simulated PT service quality or punctuality.',
  'sources':[
   'https://github.com/nellimalaika/abmt-2026/tree/ad3d05911c3ea1141fb034abb9b7db19836886fc/assignment2_analysis',
   'https://github.com/eqasim-org/eqasim-switzerland/blob/cmdp_new_version/data/microcensus/trips.py',
@@ -88,6 +90,58 @@ def survey_people(region=None):
 
 def resident_ids(region=None):
     return modes.read_resident_ids(population_path(),region or boundary())[0]
+
+def link_survey_fields(people, filename, fields, base=None):
+    """Attach questionnaire fields without selecting or reweighting residents."""
+    extras=pd.read_csv(age.unique_file(base or data_root(),filename), encoding='latin1',
+        dtype={'HHNR':'string'},usecols=['HHNR',*fields])
+    if extras.HHNR.isna().any() or extras.HHNR.duplicated().any():
+        raise ValueError('Survey linkage identifiers are missing or non-unique.')
+    result=people.merge(extras,on='HHNR',how='left',validate='one_to_one',indicator='_field_link')
+    if (len(result)!=len(people) or not result._field_link.eq('both').all()
+            or not np.array_equal(result.HHNR.to_numpy(),people.HHNR.to_numpy())
+            or not np.array_equal(result.weight.to_numpy(),people.weight.to_numpy())):
+        raise ValueError('Additional survey fields changed the resident cohort or weights.')
+    return result.drop(columns='_field_link')
+
+def survey_home_coordinates(people):
+    """Return actual household homes in the common LV95 coordinate system."""
+    result=people.copy()
+    converter=Transformer.from_crs(21781,2056,always_xy=True)
+    result['x'],result['y']=converter.transform(result.W_X_CH1903.to_numpy(),result.W_Y_CH1903.to_numpy())
+    return result
+
+def resident_home_attributes(extra_attributes=()):
+    """Link actual homes/attributes to the canonical synthetic resident IDs.
+
+    Eligibility is determined only by the existing modal resident reader.
+    No trip, subscription or accessibility condition selects a resident here.
+    IDs and coordinates stay in memory; callers export aggregates only.
+    """
+    if set(extra_attributes)&{'person','x','y','age','weight'}:
+        raise ValueError('Extra attributes must not replace resident fields.')
+    eligible,selection=modes.read_resident_ids(population_path(),boundary())
+    rows=[]
+    with gzip.open(population_path(),'rb') as stream:
+        root=None
+        for event,p in ET.iterparse(stream,events=('start','end')):
+            if root is None: root=p
+            if event!='end' or trips.local_name(p)!='person': continue
+            pid=p.get('id')
+            if pid in eligible:
+                attrs={a.get('name'):(a.text or '').strip() for section in p
+                       if trips.local_name(section)=='attributes' for a in section
+                       if trips.local_name(a)=='attribute'}
+                xy=[(age.number(attrs.get(a)),age.number(attrs.get(b))) for a,b in
+                    [('home_coordinate_x','home_coordinate_y'),('home_x','home_y')]]
+                x,y=xy[0 if all(v is not None for v in xy[0]) else 1]
+                rows.append(dict(person=pid,x=x,y=y,age=age.number(attrs.get('age')),weight=1.,
+                    **{name:attrs.get(name) for name in extra_attributes}))
+            root.clear()
+    result=pd.DataFrame(rows)
+    if result.person.duplicated().any() or set(result.person)!=eligible:
+        raise ValueError('Resident attribute linkage does not reconcile.')
+    return result,selection
 
 @lru_cache(maxsize=1)
 def person_attributes():

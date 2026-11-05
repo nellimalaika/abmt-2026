@@ -14,3 +14,20 @@ Revision 1.1 input-path fix verification:
 PASS: 12 additional path-resolution regressions (40 tests total).
 PASS: Steps2-13 integration fixture rerun with complete duplicate Boundary, microcensus, population and simulation files under a backup_copy directory; canonical inputs remain selected.
 The real local folders on the user's computer have not been accessed.
+
+Revision 1.2 PT integration verification (5 November 2026):
+PASS: 67 artificial-data regression tests; standard-library unittest, no network required.
+PASS: Python compilation and git diff whitespace checks.
+PASS: Complete run_all.py default Steps2-15 workflow: all fourteen real entry points completed in separate Python processes against the artificial fixture and the actual pinned public ARE 2015 layer. No MATSim run was started.
+PASS: Official archive SHA-256 dfede4a7a2e2c66536c476d958f9daafb9a2dd292ccadbb3fc8d8d419bdaa0b1 and extracted GeoPackage SHA-256 ef7ad0511c68a410c50caa41cfa63a8b24b6cb2d4c069227a302806569428129 match the supplied reference pins. Corrupt archive and extracted-file rejection are also tested.
+PASS: Subscription categories, GA priority, Junior/Enkel cutoff at16, route-pass grouping, three-item sensitivity, missing answers, structural Half Fare -99 below16, full-cohort denominators and weighted totals.
+PASS: Boundary-inclusive assignment, overlapping best grades, no-hit=no_class, supplied unknown vs literal None, EPSG2056 headers, unchanged row identity and individual weights, aggregate transitions and totals.
+PASS: Global 10km grid alignment and outer-boundary fallback; 29/30 distinct-person thresholds in both sources; duplicate residents rejected; classified within-cell denominators, empty cells, unknown shares and support coverage.
+PASS: Steps2-3 cohort IDs and weights exactly match the shared reader after injecting fractional/out-of-range/missing ages, invalid weights and weekend observations. The new PT readers retain the same complete cohorts including nontravellers.
+PASS: Disconnected or missing-coordinate transfer links are unresolved in the trip counter and both modal readers; connected links within1m collapse to one trip.
+PASS: Complete-run default step range and archiving now include14-15; partial runs preserve the existing results directory.
+PASS: 63 aggregate CSVs, 43 PNG figures and16 method JSONs generated; all4 new figures visually reviewed. Step14 rerun after improving footer spacing.
+PASS: Independent aggregate assertions: both new comparisons retain120 residents/source, survey totalWP240 and synthetic total weight120; subscription shares sum to100%; common transitions/grid preserve all weights; displayed cells satisfy both minimum counts. Fixture coordinates are artificial and are not study results.
+PASS: collect_review.py generated an archive containing122 aggregate tables, figures and method files; format selection/input exclusion also covered by a regression.
+
+Existing requirements already provide all third-party dependencies (including Shapely>=2). SQLite, hashing, archive and download support use Python's standard library. Real-data values, schema availability and coverage still require Nelli's local complete run. Exact scenario generator provenance and original supplied accessibility-layer vintages remain unverified. No report was edited and no private input or person-level output is included in the code change.

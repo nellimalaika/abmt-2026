@@ -43,35 +43,15 @@ def read_boundary():
 
 
 def read_microcensus(boundary):
-    households = pd.read_csv(
-        find_file("haushalte.csv", "Mikrozensus"), encoding="latin1",
-        usecols=["HHNR", "W_X_CH1903", "W_Y_CH1903", "W_BFS"],
-        dtype={"HHNR": "string"},
-    )
-    persons = pd.read_csv(
-        find_file("zielpersonen.csv", "Mikrozensus"), encoding="latin1",
-        usecols=["HHNR", "alter", "WP", "tag"], dtype={"HHNR": "string"},
-    )
-    if households.HHNR.duplicated().any() or persons.HHNR.duplicated().any():
-        raise ValueError("Duplicate household/person identifiers.")
+    from _abmt_age import read_survey
+    from abmt_common import link_survey_fields, survey_home_coordinates
+    mz, _ = read_survey(BASE, boundary)
+    mz = link_survey_fields(mz, "haushalte.csv", ["W_BFS"], base=BASE)
+    mz = survey_home_coordinates(mz)
+    mz["W_BFS"] = pd.to_numeric(mz.W_BFS, errors="coerce")
+    return mz[["HHNR", "x", "y", "age", "weight", "W_BFS"]].rename(
+        columns={"W_BFS": "municipality_id"})
 
-    mz = persons.merge(households, on="HHNR", validate="one_to_one")
-    columns = ["alter", "WP", "tag", "W_X_CH1903", "W_Y_CH1903", "W_BFS"]
-    mz[columns] = mz[columns].apply(pd.to_numeric, errors="coerce")
-    mz = mz.loc[
-        mz.tag.between(1, 5) & mz.alter.between(6, 120) & mz.WP.gt(0)
-        & mz.W_X_CH1903.gt(0) & mz.W_Y_CH1903.gt(0)
-    ].copy()
-    if mz.empty or not 400_000 <= mz.W_X_CH1903.median() <= 900_000:
-        raise ValueError("Unexpected Microcensus coordinates.")
-
-    converter = Transformer.from_crs(21781, 2056, always_xy=True)
-    x, y = converter.transform(mz.W_X_CH1903.to_numpy(), mz.W_Y_CH1903.to_numpy())
-    region = prep(boundary)
-    inside = [region.covers(Point(px, py)) for px, py in zip(x, y)]
-    mz["x"], mz["y"] = x, y
-    mz = mz.loc[inside, ["x", "y", "alter", "WP", "W_BFS"]]
-    return mz.rename(columns={"alter": "age", "WP": "weight", "W_BFS": "municipality_id"})
 
 
 def tag(element):

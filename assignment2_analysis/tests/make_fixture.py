@@ -32,17 +32,22 @@ def make_fixture(base):
             dep_time='08:00:00' if no==1 else '17:00:00',euclidean_distance=((a[0]-b[0])**2+(a[1]-b[1])**2)**.5))
     for i in range(120):
         pid=f'p{i}'; h=(hx+(i%2)*10000,hy); d=(h[0]+2000,h[1]+1000)
-        age=70 if i%2 else 30; cars=i%2; available=1 if i%3==0 else 2 if i%3==1 else 3
+        age={6:6,7:15,8:16,9:17}.get(i,70 if i%2 else 30); cars=i%2; available=1 if i%3==0 else 2 if i%3==1 else 3
         p=ET.SubElement(population,'person',{'id':pid})
         values={'age':age,'sex':'m' if i%2 else 'f','home_coordinate_x':h[0],'home_coordinate_y':h[1],
                 'home_x':h[0],'home_y':h[1],'numberOfCars':cars,'carAvail':'always' if available in [1,2] else 'never',
-                'subscriptions':'none','isOutside':str(i in [0,1]).lower(),'isCrossBorder':str(i==6).lower(),'isFreight':'false'}
+                'subscriptions':['none','ga','va','ht','va+ht','UNRECOGNISED'][i%6],
+                'isOutside':str(i in [0,1]).lower(),'isCrossBorder':str(i==6).lower(),'isFreight':'false'}
+        if i%6 != 5: values['ovgk']=['A','B','C','D','None'][i%6]
         if i==4: values['hasWalkLoopTrip']='true'
         attr(p,values); plan=ET.SubElement(p,'plan',{'selected':'yes'})
         h03=(600000+(i%2)*10000,200000); d03=(h03[0]+2000,h03[1]+1000)
-        households.append(dict(HHNR=pid,W_X_CH1903=h03[0],W_Y_CH1903=h03[1],f30100=cars,W_BFS=1))
+        households.append(dict(HHNR=pid,W_X_CH1903=h03[0],W_Y_CH1903=h03[1],f30100=cars,W_BFS=1,
+                               W_OeV_KLASSE=[1,2,3,4,5,-97][i%6]))
         person=dict(HHNR=pid,alter=age,WP=1+i%3,tag=2,gesl=1 if i%2 else 2,f42100e=available,
-          f41610a=2,f41610b=2,f41610c=2,f50200=2 if i in [2,5] else 1,T_WEGE=0 if i in [2,5] else 2,
+          f41610a=[2,1,2,2,2,-97][i%6],f41610b=[2,2,2,1,1,2][i%6],
+          f41610c=[2,2,1,2,1,2][i%6],f41610d=1 if i%8==6 else 2,
+          f41610f=1 if i==7 else 2,f50200=2 if i in [2,5] else 1,T_WEGE=0 if i in [2,5] else 2,
           A_X_CH1903=d03[0],A_Y_CH1903=d03[1],AU_X_CH1903=d03[0],AU_Y_CH1903=d03[1])
         people.append(person)
         if i==3: continue

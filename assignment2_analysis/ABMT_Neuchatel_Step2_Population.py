@@ -41,39 +41,16 @@ def read_boundary():
 
 
 def read_microcensus(boundary):
-    households = pd.read_csv(
-        find_file("haushalte.csv", "Mikrozensus"), encoding="latin1",
-        usecols=["HHNR", "W_X_CH1903", "W_Y_CH1903", "f30100"],
-        dtype={"HHNR": "string"},
-    )
-    persons = pd.read_csv(
-        find_file("zielpersonen.csv", "Mikrozensus"), encoding="latin1",
-        usecols=["HHNR", "alter", "gesl", "WP", "tag"],
-        dtype={"HHNR": "string"},
-    )
-    if households.HHNR.duplicated().any() or persons.HHNR.duplicated().any():
-        raise ValueError("Duplicate household/person identifiers.")
-
-    mz = persons.merge(households, on="HHNR", validate="one_to_one")
-    numeric_columns = ["alter", "gesl", "WP", "tag", "W_X_CH1903", "W_Y_CH1903", "f30100"]
-    mz[numeric_columns] = mz[numeric_columns].apply(pd.to_numeric, errors="coerce")
-    mz = mz.loc[
-        mz.tag.between(1, 5) & mz.alter.between(6, 120) & mz.WP.gt(0)
-        & mz.W_X_CH1903.gt(0) & mz.W_Y_CH1903.gt(0)
-    ].copy()
-
-    if not 400_000 <= mz.W_X_CH1903.median() <= 900_000:
-        raise ValueError("Unexpected Microcensus coordinate system.")
-    converter = Transformer.from_crs(21781, 2056, always_xy=True)
-    x, y = converter.transform(mz.W_X_CH1903.to_numpy(), mz.W_Y_CH1903.to_numpy())
-    mz = mz.loc[[boundary.covers(Point(px, py)) for px, py in zip(x, y)]].copy()
-    if mz.empty:
-        raise ValueError("No Microcensus residents inside the boundary.")
-
-    mz["age_group"] = pd.cut(mz.alter, [5, 17, 34, 64, 120], labels=AGE_LABELS)
+    from _abmt_age import read_survey
+    from abmt_common import link_survey_fields
+    mz, _ = read_survey(BASE, boundary)
+    mz = link_survey_fields(mz, "zielpersonen.csv", ["gesl"], base=BASE)
+    mz["gesl"] = pd.to_numeric(mz.gesl, errors="coerce")
+    mz["age_group"] = pd.cut(mz.age, [5, 17, 34, 64, 120], labels=AGE_LABELS)
     mz["sex_group"] = mz.gesl.map({1: "male", 2: "female"})
     mz["household_car_ownership"] = mz.f30100.map(car_group)
     return mz
+
 
 
 def car_group(value):

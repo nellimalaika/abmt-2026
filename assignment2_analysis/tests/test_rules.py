@@ -35,6 +35,8 @@ class AgreedRules(unittest.TestCase):
         import ABMT_Neuchatel_Step10_PT_GEH as s10
         cls.c,cls.m,cls.t,cls.ch,cls.v,cls.pt=c,m,t,ch,v,pt
         cls.s2,cls.s3,cls.s5,cls.s6,cls.s7,cls.s10=s2,s3,s5,s6,s7,s10
+        # Modules may already have been imported by another fixture suite.
+        for module in [s2,s3,s5,s6,s7,s10]: module.BASE=cls.base
         c.OUT=Path(cls.temp.name)/'results'
         cls.region=c.boundary();cls.ids=c.resident_ids()
         cls.transformer=Transformer.from_crs(21781,2056,always_xy=True)

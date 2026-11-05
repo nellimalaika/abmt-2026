@@ -99,6 +99,7 @@ def count_survey_person(rows, travel_code, domestic_count, boundary, transformer
 
     count, pending_origin, previous_kind = 0, None, None
     pending_uncertain = False
+    previous_row = None
     for row in rows.itertuples(index=False):
         purpose, return_code = baseline.number(row.wzweck1), baseline.number(row.wzweck2)
         if return_code in {2, 3}:
@@ -113,6 +114,15 @@ def count_survey_person(rows, travel_code, domestic_count, boundary, transformer
             destination = "outside"
         if pending_origin is None:
             pending_origin = origin
+        elif previous_row is not None:
+            # Match the modal reader: adjacent rows within a transfer block
+            # must connect within 1 m in the survey CRS. Never invent a link.
+            a = [baseline.number(previous_row.Z_X_CH1903), baseline.number(previous_row.Z_Y_CH1903)]
+            b = [baseline.number(row.S_X_CH1903), baseline.number(row.S_Y_CH1903)]
+            if any(v is None for v in a + b) or np.hypot(a[0]-b[0], a[1]-b[1]) > 1:
+                pending_uncertain = True
+                unresolved = True
+                audit['discontinuous_transfer_blocks'] += 1
         pseudo_code = baseline.number(row.pseudo)
         pending_uncertain |= kind == "unknown" or pseudo_code != 1
         audit["survey_rows"] += 1
@@ -127,6 +137,7 @@ def count_survey_person(rows, travel_code, domestic_count, boundary, transformer
             unresolved |= status == "unresolved"
             pending_origin, pending_uncertain = None, False
         previous_kind = kind
+        previous_row = row
     if pending_origin is not None:
         audit["unfinished_transfer_chain"] += 1
         unresolved = True

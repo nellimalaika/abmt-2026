@@ -10,11 +10,11 @@ from datetime import datetime
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, help='Directory containing Boundary, microcensus/Mikrozensus and Neuchatel_10pct')
-    parser.add_argument('--steps', nargs='+', type=int, default=list(range(2, 14)))
+    parser.add_argument('--steps', nargs='+', type=int, default=list(range(2, 16)))
     args = parser.parse_args()
     if args.base: os.environ['ABMT_DATA_DIR'] = str(args.base.expanduser().resolve())
     root = Path(__file__).resolve().parent
-    if args.steps == list(range(2,14)) and (root/'results').exists():
+    if args.steps == list(range(2,16)) and (root/'results').exists():
         suffix=datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         archive=root/f'results_previous_{suffix}'
         (root/'results').rename(archive)

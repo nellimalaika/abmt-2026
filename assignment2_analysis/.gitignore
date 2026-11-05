@@ -1,6 +1,8 @@
 # Generated analysis outputs and transient files
 results/
 **/results/
+results_previous_*/
+reference_data/
 __pycache__/
 *.py[cod]
 .pytest_cache/
