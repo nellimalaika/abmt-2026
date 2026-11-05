@@ -100,41 +100,37 @@ def compare(survey, population, definition):
 
 
 def plot_comparison(table, definition, survey_n, synthetic_n, path):
-    # Always show the four substantive categories. Show additional unknown
-    # categories if either cohort contains someone in them, even at tiny shares.
     visible = table.loc[(table.index < 4) | (table.survey_n + table.synthetic_n > 0)]
-    access_labels = {"available": "Personal access", "unavailable": "No personal access / inapplicable",
-                     "unknown": "Personal availability unknown"}
-    if definition == "always_only":
-        access_labels.update(available="Always available",
-                             unavailable="Not always available / inapplicable")
-    labels = [HOUSEHOLD_LABELS[h] + "\n" + access_labels[p]
+    household_labels = {'0_cars': '0 household cars', '1plus_cars': '1+ household cars',
+                        'unknown': 'Ownership unknown'}
+    access_labels = {'available': 'Driver access', 'unavailable': 'No driver access / inapplicable',
+                    'unknown': 'Access unknown'}
+    if definition == 'always_only':
+        access_labels.update(available='Always available', unavailable='Not always available / inapplicable')
+    labels = [household_labels[h] + '\n' + access_labels[p]
               for h, p in zip(visible.household, visible.personal)]
     y = np.arange(len(visible))
-    fig, ax = plt.subplots(figsize=(11, max(5.5, 0.72 * len(visible) + 2.2)))
-    ax.barh(y - 0.19, visible.survey_weighted_pct, height=0.36, color="#237A8A",
-            label="MZMV 2015 (WP weighted)")
-    ax.barh(y + 0.19, visible.synthetic_pct, height=0.36, color="#DF8D39",
-            label="Synthetic population")
-    ax.set(yticks=y, yticklabels=labels, xlabel="Share of all eligible residents (%)")
+    fig, ax = plt.subplots(figsize=(10.5, max(4.8, .65 * len(visible) + 1.6)))
+    ax.barh(y - .19, visible.survey_weighted_pct, .36, color='#1f77b4', label='Mikrozensus (weighted)')
+    ax.barh(y + .19, visible.synthetic_pct, .36, color='#ff7f0e', label='MATSim (10% sample)')
+    ax.set(yticks=y, yticklabels=labels, xlabel='Share of eligible residents (%)')
     ax.invert_yaxis()
-    ax.tick_params(axis="y", labelsize=9)
-    ax.grid(axis="x", alpha=0.2)
+    ax.tick_params(axis='y', labelsize=9)
+    ax.grid(axis='x', alpha=.18)
     ax.set_axisbelow(True)
     if len(visible) > 4:
-        ax.axhline(3.5, color="#777777", linewidth=0.7, alpha=0.6)
-    fig.suptitle("Neuchatel: household car ownership and personal availability", y=0.98, fontsize=13)
-    fig.text(0.5, 0.93, DEFINITIONS[definition], ha="center", fontsize=10)
-    fig.legend(*ax.get_legend_handles_labels(), loc="upper center", bbox_to_anchor=(0.5, 0.91),
-               ncol=2, frameon=False, fontsize=9)
-    fig.text(0.5, 0.055, f"Matched resident cohort, ages 6-120; weekday survey. "
-             f"Survey n={survey_n:,}; synthetic n={synthetic_n:,}.", ha="center", fontsize=8)
-    fig.text(0.5, 0.025, "Unknowns remain in totals. Personal access concerns driving, not riding as a passenger.\n"
-             "Synthetic always/never is unchanged; exact scenario generation version is unverified.",
-             ha="center", fontsize=8)
-    fig.tight_layout(rect=(0, 0.09, 1, 0.86))
-    fig.savefig(path, dpi=180)
+        ax.axhline(3.5, color='.65', linewidth=.6)
+    title = 'Neuchâtel: car ownership and driver access'
+    if definition == 'always_only':
+        title += ' (always only)'
+    fig.suptitle(title, y=.98, fontsize=14)
+    ax.legend(loc='lower center', bbox_to_anchor=(.5, 1.005), ncol=2, frameon=False, fontsize=9)
+    note = ('Access = always or by agreement' if definition == 'any_access' else 'Access = always only')
+    fig.text(.5, .025, note + ' · All eligible residents; unknowns retained', ha='center', fontsize=8)
+    fig.tight_layout(rect=(0, .06, 1, .92))
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
+
 
 
 def unknown_shares(table):

@@ -498,66 +498,62 @@ def road_summary(targets, links, road, daily, sample_size, start, end, target_un
 
 
 def plot_pt(table, path):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2))
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
     if table.empty:
         for ax in axes:
-            ax.axis("off")
-        axes[0].text(.5, .5, "No suitable PT vehicle-stop events.\nOperational reliability not assessed.", ha="center", transform=axes[0].transAxes)
+            ax.axis('off')
+        axes[0].text(.5, .5, 'No suitable PT stop events', ha='center', transform=axes[0].transAxes)
     else:
-        data = table[(table.time_window == "all") & (table.service_mode != "all")]
+        data = table[(table.time_window == 'all') & (table.service_mode != 'all')]
         x = np.arange(len(data))
-        axes[0].bar(x, data.arrival_delay_median_s / 60, color="#237A8A", label="Median")
-        axes[0].scatter(x, data.arrival_delay_p90_s / 60, color="#E38D35", marker="D", label="90th percentile", zorder=3)
+        axes[0].bar(x, data.arrival_delay_median_s / 60, color='#1f77b4', label='Median')
+        axes[0].scatter(x, data.arrival_delay_p90_s / 60, color='#ff7f0e', marker='D',
+                        label='90th percentile', zorder=3)
         axes[0].set_xticks(x, data.service_mode)
-        axes[0].axhline(0, color="black", linewidth=.7)
-        axes[0].set_ylabel("Arrival delay relative to timetable (minutes)")
-        axes[0].set_title("Delay by service mode")
+        axes[0].axhline(0, color='.3', linewidth=.7)
+        axes[0].set(ylabel='Arrival delay (min)', title='Delay by service mode')
         axes[0].legend(frameon=False)
-        temporal = table[(table.service_mode == "all") & table.time_window.isin(WINDOWS[:-1])].set_index("time_window").reindex(WINDOWS[:-1])
-        axes[1].bar(np.arange(7), temporal.arrival_delay_late_gt_300s_pct, color="#237A8A")
+        temporal = table[(table.service_mode == 'all') & table.time_window.isin(WINDOWS[:-1])].set_index('time_window').reindex(WINDOWS[:-1])
+        axes[1].bar(np.arange(7), temporal.arrival_delay_late_gt_300s_pct, color='#1f77b4')
         axes[1].set_xticks(np.arange(7), WINDOW_LABELS)
-        axes[1].set_ylabel("Stop arrivals more than 5 minutes late (%)")
-        axes[1].set_title("Late-arrival fraction by clock window")
+        axes[1].set(ylabel='Arrivals >5 min late (%)', title='Late arrivals by time window')
         for ax in axes:
-            ax.grid(axis="y", alpha=.2)
+            ax.grid(axis='y', alpha=.18)
             ax.set_axisbelow(True)
-    fig.suptitle("Neuchatel: simulated PT timetable adherence", fontsize=16)
-    fig.text(.025, .035, "Stop calls at timetable stops inside the study boundary; all service users. Calls, not passengers, receive equal weight.\n"
-             "Internal simulated performance only: one average day, without observed punctuality validation. Zero delays can reflect timetable assumptions.\n"
-             "Five-minute lateness is a descriptive threshold chosen for this analysis. Missing delay attributes remain missing, never zero.", fontsize=9, linespacing=1.5)
-    fig.subplots_adjust(left=.075, right=.98, top=.82, bottom=.28, wspace=.30)
-    fig.savefig(path, dpi=180)
+    fig.suptitle('Neuchâtel: simulated PT punctuality', fontsize=15, y=.98)
+    fig.text(.5, .025, 'Simulated stop calls inside the study area · No observed punctuality comparison',
+             ha='center', fontsize=8)
+    fig.subplots_adjust(left=.075, right=.98, top=.83, bottom=.18, wspace=.30)
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
+
 
 
 def plot_road(table, summary, path):
-    data = table[table.status.eq("eligible") & table.geh_average_hourly_link.notna()]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5.2))
+    data = table[table.status.eq('eligible') & table.geh_average_hourly_link.notna()]
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
     if data.empty:
         for ax in axes:
-            ax.axis("off")
-        axes[0].text(.5, .5, "No eligible GEH comparisons.\nSee status/diagnostics in JSON.", ha="center", transform=axes[0].transAxes)
+            ax.axis('off')
+        axes[0].text(.5, .5, 'No eligible target links', ha='center', transform=axes[0].transAxes)
     else:
         maximum = max(data.model_average_hourly_link_vehicles.max(), data.observed_average_hourly_link_vehicles.max()) * 1.05
-        axes[0].scatter(data.observed_average_hourly_link_vehicles, data.model_average_hourly_link_vehicles, color="#237A8A")
-        axes[0].plot([0, maximum], [0, maximum], color="#555555", linewidth=1)
-        axes[0].set(xlabel="Target average-hourly link vehicles", ylabel="Event-derived model average-hourly link vehicles", title=f"Matched targets: n={len(data)}")
+        axes[0].scatter(data.observed_average_hourly_link_vehicles,
+                        data.model_average_hourly_link_vehicles, color='#1f77b4')
+        axes[0].plot([0, maximum], [0, maximum], color='.4', linewidth=1)
+        axes[0].set(xlabel='Target (vehicles/h/link)', ylabel='Model (vehicles/h/link)',
+                    title=f'Matched target links (n={len(data)})')
         values = np.sort(data.geh_average_hourly_link.to_numpy())
-        axes[1].plot(values, np.arange(1, len(values)+1) * 100/len(values), color="#237A8A", marker=".")
-        axes[1].axvline(5, color="#E38D35", linestyle="--", label="GEH = 5")
-        axes[1].set(xlabel="GEH from average-hourly link volumes", ylabel="Cumulative share of matched links (%)", title="Distribution of count discrepancies")
-        axes[1].set_ylim(0, 100)
+        axes[1].plot(values, np.arange(1, len(values)+1) * 100/len(values), color='#1f77b4', marker='.')
+        axes[1].axvline(5, color='#ff7f0e', linestyle='--', label='GEH = 5')
+        axes[1].set(xlabel='GEH (average-hourly whole-link volumes)',
+                    ylabel='Cumulative links (%)', title='GEH distribution', ylim=(0, 100))
         axes[1].legend(frameon=False)
         for ax in axes:
-            ax.grid(alpha=.2)
-    fig.suptitle("Neuchatel: road-count consistency with supplied targets", fontsize=15)
-    fig.text(.025, .035, "All road traffic at eligible target links; no resident filter. Events counted within the stated window and scaled by the population sample.\n"
-             "Target units are explicit; per-lane targets are converted to all-lane LINK volumes before GEH. CSV targets may be calibration inputs.\n"
-             "This checks period-average rates; original observation dates/day types and individual hourly fit remain unverified.", fontsize=9, linespacing=1.5)
-    fig.subplots_adjust(left=.08, right=.98, top=.82, bottom=.28, wspace=.30)
-    fig.savefig(path, dpi=180)
+            ax.grid(alpha=.18)
+    fig.suptitle('Neuchâtel: road-count comparison', fontsize=15, y=.98)
+    fig.text(.5, .025, 'Average-hourly whole-link volumes · Targets may be calibration inputs',
+             ha='center', fontsize=8)
+    fig.subplots_adjust(left=.08, right=.98, top=.83, bottom=.18, wspace=.30)
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
-
-
-
-

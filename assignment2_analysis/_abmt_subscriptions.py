@@ -118,31 +118,32 @@ def compare(survey, population, definition):
     return table, mz_codes
 
 def plot_comparison(table, definition, survey_n, synthetic_n, path):
+    labels = (['None of represented products', 'GA-coded (incl. Junior/Enkel <16)',
+               'Regional / route pass', 'Half Fare', 'Regional / route + Half Fare', 'Unknown']
+              if definition == 'generator' else
+              ['None of the three products', 'GA', 'Regional / Inter pass',
+               'Half Fare', 'Regional / Inter + Half Fare', 'Unknown'])
     y = np.arange(len(table))
-    fig, ax = plt.subplots(figsize=(11, 6.9))
-    ax.barh(y - 0.19, table.survey_weighted_pct, height=0.36, color="#237A8A",
-            label="MZMV 2015 (WP weighted)")
-    ax.barh(y + 0.19, table.synthetic_pct, height=0.36, color="#DF8D39", label="Synthetic population")
-    ax.set(yticks=y, yticklabels=table.label, xlabel="Share of all eligible residents (%)")
+    fig, ax = plt.subplots(figsize=(10.5, 5.5))
+    ax.barh(y - .19, table.survey_weighted_pct, .36, color='#1f77b4',
+            label='Mikrozensus (weighted)')
+    ax.barh(y + .19, table.synthetic_pct, .36, color='#ff7f0e',
+            label='MATSim (10% sample)')
+    ax.set(yticks=y, yticklabels=labels, xlabel='Share of eligible residents (%)')
     ax.invert_yaxis()
-    ax.tick_params(axis="y", labelsize=9)
-    ax.grid(axis="x", alpha=0.2)
+    ax.tick_params(axis='y', labelsize=10)
+    ax.grid(axis='x', alpha=.18)
     ax.set_axisbelow(True)
-    ax.axhline(4.5, color="#777777", linewidth=0.7, alpha=0.6)
-    fig.suptitle("Neuchatel: PT subscription groups", y=0.98, fontsize=14)
-    subtitle = ("Current public generator grouping; exact scenario version unverified" if definition == "generator"
-                else "Sensitivity: survey uses three items only; synthetic codes unchanged")
-    fig.text(0.5, 0.93, subtitle, ha="center", fontsize=10)
-    fig.legend(*ax.get_legend_handles_labels(), loc="upper center", bbox_to_anchor=(0.5, 0.91),
-               ncol=2, frameon=False, fontsize=9)
-    fig.text(0.5, 0.025, f"Matched resident cohort, ages 6-120; weekday survey. "
-             f"Survey n={survey_n:,}; synthetic n={synthetic_n:,}.\n"
-             "Unknowns remain in totals. Groups represent model codes, not identical fare rights.\n"
-             "'None' concerns the represented products; it does not mean no PT use or no other card.",
-             ha="center", va="bottom", fontsize=8, linespacing=1.5)
-    fig.tight_layout(rect=(0, 0.13, 1, 0.86))
-    fig.savefig(path, dpi=180)
+    ax.axhline(4.5, color='.65', linewidth=.6)
+    grouping = 'main groups' if definition == 'generator' else 'three-item sensitivity'
+    fig.suptitle(f'Neuchâtel: PT subscriptions — {grouping}', fontsize=14, y=.98)
+    ax.legend(loc='lower center', bbox_to_anchor=(.5, 1.005), ncol=2, frameon=False, fontsize=9)
+    fig.text(.5, .025, 'Unknowns included · Product groups do not imply identical fare rights.',
+             ha='center', fontsize=8)
+    fig.tight_layout(rect=(0, .06, 1, .92))
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
+
 
 
 def run():

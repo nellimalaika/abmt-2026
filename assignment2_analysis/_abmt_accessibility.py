@@ -265,72 +265,76 @@ def transitions(frame):
     return result
 
 def plot_comparison(supplied, common, survey_n, synthetic_n, path):
-    fig = plt.figure(figsize=(14, 7), layout="constrained")
-    spec = fig.add_gridspec(2, 2, height_ratios=[1, 0.18])
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 5.2), sharex=True, sharey=True)
     maximum = 1.08 * max(supplied.survey_weighted_pct.max(), supplied.synthetic_pct.max(),
                          common.survey_weighted_pct.max(), common.synthetic_pct.max())
     y = np.arange(len(CLASSES))
-    for i, (table, title) in enumerate([(supplied, "Supplied attributes"), (common, "Both assigned from ARE 2015")]):
-        ax = fig.add_subplot(spec[0, i])
-        ax.barh(y - 0.19, table.survey_weighted_pct, height=0.36, color="#237A8A", label="Survey (WP weighted)")
-        ax.barh(y + 0.19, table.synthetic_pct, height=0.36, color="#DF8D39", label="Synthetic population")
-        ax.set(yticks=y, yticklabels=LABELS if i == 0 else [""] * len(y), xlim=(0, maximum),
-               xlabel="Share of all eligible residents (%)")
-        ax.invert_yaxis()
-        ax.set_title(title, pad=35)
-        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, fontsize=8)
-        ax.grid(axis="x", alpha=0.2)
+    for ax, table, title in zip(axes, [supplied, common], ['Supplied attributes', 'Common ARE 2015 reference']):
+        ax.barh(y - .19, table.survey_weighted_pct, .36, color='#1f77b4',
+                label='Mikrozensus (weighted)')
+        ax.barh(y + .19, table.synthetic_pct, .36, color='#ff7f0e',
+                label='MATSim (10% sample)')
+        ax.set(xlim=(0, maximum), xlabel='Share of eligible residents (%)', title=title)
+        ax.grid(axis='x', alpha=.18)
         ax.set_axisbelow(True)
-    footer = fig.add_subplot(spec[1, :])
-    footer.axis("off")
-    footer.text(0, 0.95, f"Same residents and weights throughout. Survey n={survey_n:,}; synthetic n={synthetic_n:,}.\n"
-                "Right panel: identical reference polygons, CRS and boundary rule for both datasets. Unknown supplied classes remain visible on the left.\n"
-                "Reference: ARE, OeV-Gueteklassen archive 2015 (data.geo.admin.ch; catalogue datetime 2015-03-17).\n"
-                "This checks population locations under a common reference; it does not establish the original class-layer years or simulated service quality.",
-                va="top", fontsize=8.5, linespacing=1.55)
-    fig.suptitle("Neuchatel: PT accessibility before and after using a common reference", fontsize=14)
-    fig.savefig(path, dpi=180)
+    axes[0].set_yticks(y, ['A: very good', 'B: good', 'C: moderate', 'D: low', 'No class', 'Unknown'])
+    axes[0].invert_yaxis()
+    axes[1].tick_params(labelleft=False)
+    fig.suptitle('Neuchâtel: residential PT classes', fontsize=15, y=.98)
+    fig.legend(*axes[0].get_legend_handles_labels(), loc='upper center',
+               bbox_to_anchor=(.5, .925), ncol=2, frameon=False, fontsize=10)
+    fig.text(.5, .025, 'All eligible residents · Unknown supplied attributes retained', ha='center', fontsize=8)
+    fig.subplots_adjust(left=.14, right=.985, top=.79, bottom=.14, wspace=.08)
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
 
+
 def plot_common_maps(table, geometry, polygon, size, min_survey_n, min_synthetic_n, path):
-    shown = table.loc[table.difference_shown, "difference_pp"]
+    shown = table.loc[table.difference_shown, 'difference_pp']
     limit = max(float(shown.abs().max()), 1) if len(shown) else 1
     norms = [Normalize(0, 100), Normalize(0, 100), Normalize(-limit, limit)]
-    cmaps = [plt.get_cmap("YlOrRd"), plt.get_cmap("YlOrRd"), plt.get_cmap("RdBu_r")]
+    # Preserve the original map palettes; bar-chart colours remain blue/orange.
+    cmaps = [plt.get_cmap('YlOrRd'), plt.get_cmap('YlOrRd'), plt.get_cmap('RdBu_r')]
     paths = {key: spatial.polygon_path(value) for key, value in geometry.items()}
     outline = spatial.polygon_path(polygon)
-    fig = plt.figure(figsize=(15.5, 7.5), layout="constrained")
-    spec = fig.add_gridspec(3, 3, height_ratios=[1, 0.045, 0.23])
+    fig = plt.figure(figsize=(14, 5.1))
+    spec = fig.add_gridspec(2, 3, height_ratios=[1, .06])
     xmin, ymin, xmax, ymax = polygon.bounds
-    margin = max(xmax - xmin, ymax - ymin) * 0.04
-    columns = ["survey_low_service_pct", "synthetic_low_service_pct", "difference_pp"]
-    masks = ["survey_rate_shown", "synthetic_rate_shown", "difference_shown"]
-    for i, title in enumerate(["Survey (WP weighted)", "Synthetic population", "Synthetic minus survey"]):
+    margin = max(xmax - xmin, ymax - ymin) * .04
+    columns = ['survey_low_service_pct', 'synthetic_low_service_pct', 'difference_pp']
+    masks = ['survey_rate_shown', 'synthetic_rate_shown', 'difference_shown']
+    for i, title in enumerate(['Mikrozensus', 'MATSim', 'MATSim − Mikrozensus']):
         ax = fig.add_subplot(spec[0, i])
         for row in table.itertuples(index=False):
             masked = not getattr(row, masks[i])
-            ax.add_patch(PathPatch(paths[(row.ix, row.iy)], facecolor="#ECECEC" if masked else cmaps[i](norms[i](getattr(row, columns[i]))),
-                                   edgecolor="#AAAAAA" if masked else "white", linewidth=0.35, hatch="///" if masked else None))
-        ax.add_patch(PathPatch(outline, facecolor="none", edgecolor="#222222", linewidth=0.8))
-        ax.set(xlim=(xmin-margin, xmax+margin), ylim=(ymin-margin, ymax+margin), title=title, xlabel="Easting (LV95 km)")
-        ax.set_aspect("equal", adjustable="box")
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, pos: f"{value/1000:.0f}"))
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda value, pos: f"{value/1000:.0f}"))
+            ax.add_patch(PathPatch(paths[(row.ix, row.iy)],
+                facecolor='#ECECEC' if masked else cmaps[i](norms[i](getattr(row, columns[i]))),
+                edgecolor='#AAAAAA' if masked else 'white', linewidth=.4,
+                hatch='///' if masked else None))
+        ax.add_patch(PathPatch(outline, facecolor='none', edgecolor='#222222', linewidth=.8))
+        ax.set(xlim=(xmin-margin, xmax+margin), ylim=(ymin-margin, ymax+margin),
+               title=title, xlabel='LV95 easting (km)')
+        ax.set_aspect('equal', adjustable='box')
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, pos: f'{value/1000:.0f}'))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda value, pos: f'{value/1000:.0f}'))
         ax.tick_params(labelsize=8, labelleft=i == 0)
         if i == 0:
-            ax.set_ylabel("Northing (LV95 km)")
+            ax.set_ylabel('LV95 northing (km)')
         color_ax = fig.add_subplot(spec[1, i])
-        fig.colorbar(plt.cm.ScalarMappable(norm=norms[i], cmap=cmaps[i]), cax=color_ax, orientation="horizontal",
-                     label="Difference in percentage points" if i == 2 else "D / no class among classified residents (%)")
-    footer = fig.add_subplot(spec[2, :])
-    footer.axis("off")
-    footer.text(0, 0.95, "Identical ARE 2015 polygons applied to both sets of home coordinates. D/no-class rates are calculated WITHIN each cell.\n"
-                f"Hatching: fewer than {min_survey_n} survey or {min_synthetic_n} synthetic classified residents; differences require both.\n"
-                "Support thresholds are heuristics, not significance tests. This is a common-reference location comparison, not a current-service assessment.\n"
-                "Reference: ARE, OeV-Gueteklassen archive 2015 (data.geo.admin.ch).", va="top", fontsize=9, linespacing=1.6)
-    fig.suptitle(f"Neuchatel: low-service home contexts using ARE 2015 for both populations ({size/1000:g} km grid)", fontsize=14)
-    fig.savefig(path, dpi=180)
+        bar = fig.colorbar(plt.cm.ScalarMappable(norm=norms[i], cmap=cmaps[i]),
+            cax=color_ax, orientation='horizontal')
+        bar.set_label('Difference (percentage points)' if i == 2 else
+                      'D / no class among classified residents (%)', fontsize=9)
+        bar.ax.tick_params(labelsize=8)
+    support = (f'n < {min_survey_n}' if min_survey_n == min_synthetic_n else
+               f'MZ n < {min_survey_n} / MATSim n < {min_synthetic_n}')
+    fig.suptitle('Neuchâtel: residential PT coverage (ARE 2015)', fontsize=15, y=.98)
+    fig.text(.5, .025, f'{size/1000:g} km grid · Hatched: {support}; differences require both sources · Residential reference',
+             ha='center', fontsize=8)
+    fig.subplots_adjust(left=.055, right=.99, top=.84, bottom=.22, wspace=.13, hspace=.30)
+    fig.savefig(path, dpi=180, bbox_inches='tight', pad_inches=.12)
     plt.close(fig)
+
 
 
 def add_survey_class(survey, data):
