@@ -25,11 +25,8 @@ MIN_MATSIM = 30
 
 
 def find_file(name, folder):
-    files = [p for p in BASE.rglob(name) if p.is_file()]
-    if not files:
-        raise FileNotFoundError(f"File not found: {name}")
-    preferred = [p for p in files if folder.lower() in str(p.parent).lower()]
-    return (preferred or files)[0]
+    from abmt_paths import find_input_file
+    return find_input_file(BASE, name, folder)
 
 
 def read_boundary():
@@ -126,19 +123,19 @@ def read_population(boundary):
             details = attributes(person)
             excluded = any(
                 str(details.get(flag, "")).strip().lower() in ("true", "yes", "1")
-                for flag in ("isFreight", "isOutside", "isCrossBorder", "isExternalFR")
+                for flag in ("isFreight",)
             ) or str(details.get("subpopulation", "")).strip().lower() in (
-                "outside", "freight", "crossborder"
+                "freight",
             )
-            if not excluded:
-                x = as_number(details.get("home_x"))
-                y = as_number(details.get("home_y"))
+            if not excluded and str(details.get("type", "")).casefold() != "truck":
+                x = as_number(details.get("home_coordinate_x"))
+                y = as_number(details.get("home_coordinate_y"))
                 if x is None or y is None:
-                    x = as_number(details.get("home_coordinate_x"))
-                    y = as_number(details.get("home_coordinate_y"))
+                    x = as_number(details.get("home_x"))
+                    y = as_number(details.get("home_y"))
                 age = as_number(details.get("age"))
                 if (x is not None and y is not None and 1_000_000 < x < 4_000_000
-                        and age is not None and 6 <= age <= 120 and region.covers(Point(x, y))):
+                        and age is not None and 6 <= age <= 120 and age.is_integer() and region.covers(Point(x, y))):
                     home = home_attributes(person)
                     records.append((
                         x, y, age, 1.0,
@@ -339,7 +336,9 @@ def main():
     cells = grid_summary(mz, x0, y0, "mz").merge(
         grid_summary(sim, x0, y0, "sim"), on=["ix", "iy"], how="outer"
     ).fillna(0)
-    cells = cells.loc[cells.mz_n.ge(MIN_MZ) & cells.sim_n.ge(MIN_MATSIM)].copy()
+    cells['comparison_shown'] = cells.mz_n.ge(MIN_MZ) & cells.sim_n.ge(MIN_MATSIM)
+    cells.to_csv(OUTPUT / 'spatial_validation_grid_10km_all_cells.csv', sep=';', index=False)
+    cells = cells.loc[cells.comparison_shown].copy()
     if cells.empty:
         raise ValueError("Not enough observations for a 10 km spatial comparison.")
     cells["resident_distribution_diff_pp"] = cells.sim_share_pct - cells.mz_share_pct
@@ -357,3 +356,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    from abmt_common import write_method, output
+    write_method(output('spatial_validation_corrected'))

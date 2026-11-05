@@ -52,84 +52,22 @@ def load_boundary_polygon():
     return polygon
 
 def survey_home_coordinates(eligible):
-    hh = pd.read_csv(find_file("haushalte.csv", "Mikrozensus"), encoding="latin1",
-                     dtype={"HHNR": "string"}, usecols=["HHNR", "W_X_CH1903", "W_Y_CH1903"])
-    if hh["HHNR"].duplicated().any():
-        raise ValueError("Duplicate HHNR in household CSV")
-    hh = hh.loc[hh["HHNR"].isin(eligible["HHNR"])].copy()
-    hh["W_X_CH1903"] = pd.to_numeric(hh["W_X_CH1903"], errors="coerce")
-    hh["W_Y_CH1903"] = pd.to_numeric(hh["W_Y_CH1903"], errors="coerce")
-    tr = Transformer.from_crs("EPSG:21781", "EPSG:2056", always_xy=True)
-    hh["home_x"], hh["home_y"] = tr.transform(hh["W_X_CH1903"].to_numpy(),
-                                                hh["W_Y_CH1903"].to_numpy())
-    return hh[["HHNR", "home_x", "home_y"]]
+    from abmt_common import person_attributes
+    a,b=person_attributes()
+    return a.loc[a.HHNR.isin(eligible.HHNR),["HHNR","home_x","home_y"]]
+
 
 def sim_home_coordinates(eligible_ids):
-    path = find_file("neuchatel_population.xml.gz", "Neuchatel_10pct")
-    records = []
-    with gzip.open(path, "rb") as stream:
-        root = None
-        for event, elem in ET.iterparse(stream, events=("start", "end")):
-            if root is None:
-                root = elem
-            if event != "end" or local_tag(elem.tag) != "person":
-                continue
-            person = str(elem.get("id", ""))
-            if person in eligible_ids:
-                attrs = {}
-                for child in elem:
-                    if local_tag(child.tag) == "attributes":
-                        for a in child:
-                            if local_tag(a.tag) == "attribute":
-                                attrs[a.get("name", "")] = (a.text or "").strip()
-                x = attrs.get("home_x") or attrs.get("home_coordinate_x")
-                y = attrs.get("home_y") or attrs.get("home_coordinate_y")
-                records.append((person, x, y))
-            root.clear()
-    people = pd.DataFrame(records, columns=["person", "home_x", "home_y"])
-    if people["person"].duplicated().any():
-        raise ValueError("Duplicate MATSim person ID")
-    people["home_x"] = pd.to_numeric(people["home_x"], errors="coerce")
-    people["home_y"] = pd.to_numeric(people["home_y"], errors="coerce")
-    return people
+    from abmt_common import person_attributes
+    a,b=person_attributes()
+    return b.loc[b.person.isin(eligible_ids),["person","home_x","home_y"]]
+
 
 def mz_trips(eligible):
-    path = find_file("wege.csv", "Mikrozensus")
-    cols = ["HHNR", "WEGNR", "wmittel", "f51100",
-            "S_X_CH1903", "S_Y_CH1903", "Z_X_CH1903", "Z_Y_CH1903"]
-    df = pd.read_csv(path, encoding="latin1", dtype={"HHNR": "string", "WEGNR": "string"},
-                     usecols=cols, low_memory=False)
-    df = df[df["HHNR"].isin(eligible["HHNR"])].copy()
-    if df.duplicated(["HHNR", "WEGNR"]).any():
-        raise ValueError("Duplicate Mikrozensus way IDs")
-    df = df.merge(eligible[["HHNR", "WP"]], on="HHNR", validate="many_to_one")
-    df["wmittel"] = pd.to_numeric(df["wmittel"], errors="coerce")
-    df["mode"] = df["wmittel"].map(MZ_MODE_MAP)
+    from abmt_common import mode_data
+    a,b,_=mode_data()
+    return a.loc[a.HHNR.isin(eligible.HHNR),["HHNR","WP","mode","distance_m","time_seconds"]].copy()
 
-    stages = pd.read_csv(find_file("etappen.csv", "Mikrozensus"), encoding="latin1",
-                         dtype={"HHNR": "string", "WEGNR": "string"},
-                         usecols=["HHNR", "WEGNR", "f51300"])
-    stages["f51300"] = pd.to_numeric(stages["f51300"], errors="coerce")
-    passengers = stages.loc[stages["f51300"].eq(8), ["HHNR", "WEGNR"]].drop_duplicates()
-    passengers["car_passenger"] = True
-    df = df.merge(passengers, how="left", on=["HHNR", "WEGNR"], validate="many_to_one")
-    df.loc[df["car_passenger"].eq(True), "mode"] = "car_passenger"
-
-    df = df[df["mode"].isin(MODES)].copy()
-    for col in ("S_X_CH1903", "S_Y_CH1903", "Z_X_CH1903", "Z_Y_CH1903"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    good = (df["S_X_CH1903"].between(400_000, 900_000) &
-            df["Z_X_CH1903"].between(400_000, 900_000) &
-            df["S_Y_CH1903"].between(0, 400_000) &
-            df["Z_Y_CH1903"].between(0, 400_000))
-    df = df[good].copy()
-    tr = Transformer.from_crs("EPSG:21781", "EPSG:2056", always_xy=True)
-    sx, sy = tr.transform(df["S_X_CH1903"].to_numpy(), df["S_Y_CH1903"].to_numpy())
-    zx, zy = tr.transform(df["Z_X_CH1903"].to_numpy(), df["Z_Y_CH1903"].to_numpy())
-    df["distance_m"] = np.hypot(zx - sx, zy - sy)
-    df = df[df["distance_m"].gt(1) & np.isfinite(df["distance_m"])].copy()
-    df["time_seconds"] = pd.to_numeric(df["f51100"], errors="coerce") * 60.0
-    return df[["HHNR", "WP", "mode", "distance_m", "time_seconds"]]
 
 def parse_time_series(values):
 
@@ -143,34 +81,10 @@ def parse_time_series(values):
     return result
 
 def matsim_trips(resident_ids):
-    path = find_file("output_trips.csv.gz", "simulation_output")
-    cols, sep = read_csv_header(path)
-    person_col = next((c for c in ("person", "person_id", "personId") if c in cols), None)
-    mode_col = next((c for c in ("main_mode", "mainMode", "mode") if c in cols), None)
-    distance_col = next((c for c in ("euclidean_distance", "euclideanDistance") if c in cols), None)
-    departure_col = next((c for c in ("dep_time", "departure_time", "departureTime") if c in cols), None)
-    if not all((person_col, mode_col, distance_col, departure_col)):
-        raise ValueError("Expected MATSim person, main_mode, euclidean_distance and dep_time. "
-                         "Available headers: " + repr(cols))
-    activity_cols = [c for c in ("start_activity_type", "end_activity_type") if c in cols]
-    use = [person_col, mode_col, distance_col, departure_col] + activity_cols
-    df = pd.read_csv(path, compression="gzip", sep=sep, low_memory=False,
-                     dtype={person_col: "string"}, usecols=use)
-    df = df[df[person_col].isin(resident_ids)].copy()
-    for col in activity_cols:
-        forbidden = df[col].fillna("").astype("string").str.lower().str.contains(
-            r"outside|crossborder|freight|^border", regex=True).fillna(False)
-        df = df.loc[~forbidden].copy()
-    df["mode"] = df[mode_col].map(classify_sim_mode)
-    unknowns = df.loc[df["mode"].eq("unknown"), mode_col].value_counts(dropna=False)
-    if len(unknowns):
-        raise ValueError(f"Unknown MATSim main modes: {unknowns.to_dict()}; do not guess mapping")
-    df = df[df["mode"].isin(MODES)].copy()
-    df["distance_m"] = pd.to_numeric(df[distance_col], errors="coerce")
-    df = df[df["distance_m"].gt(1) & np.isfinite(df["distance_m"])].copy()
-    df["time_seconds"] = parse_time_series(df[departure_col])
-    df = df.rename(columns={person_col: "person"})
-    return df[["person", "mode", "distance_m", "time_seconds"]]
+    from abmt_common import mode_data
+    a,b,_=mode_data()
+    return b.loc[b.person.isin(resident_ids),["person","mode","distance_m","time_seconds"]].copy()
+
 
 def time_bins(df):
     x = df.copy()
@@ -299,10 +213,14 @@ def main():
     comparison.to_csv(OUT / "mode_share_by_departure_time.csv", index=False)
     sizes.to_csv(OUT / "departure_time_coverage.csv", index=False)
     plot_temporal(comparison)
+    pd.DataFrame([{"source":"survey","all_primary_trips":len(mz),"time_classified_trips":len(mz_time),"all_trip_weight":float(mz.WP.sum()),"classified_trip_weight":float(mz_time.WP.sum())},
+                  {"source":"simulation","all_primary_trips":len(sim),"time_classified_trips":len(sim_time)}]).to_csv(OUT/"time_selection_coverage.csv",index=False)
 
     mz = mz.merge(survey_home_coordinates(eligible), on="HHNR", how="left", validate="many_to_one")
     sim = sim.merge(sim_home_coordinates(ids), on="person", how="left", validate="many_to_one")
     minx, miny, maxx, maxy = polygon.bounds
+    minx = np.floor(minx/GRID_M)*GRID_M
+    miny = np.floor(miny/GRID_M)*GRID_M
     mz = grid_cells(mz, minx, miny)
     sim = grid_cells(sim, minx, miny)
     all_cells = sorted(set(mz["spatial_bin"]).union(sim["spatial_bin"]),
@@ -330,3 +248,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    from abmt_common import write_method, output
+    write_method(output('mode_share_spatial_temporal'))

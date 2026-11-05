@@ -21,8 +21,8 @@ from shapely.prepared import prep
 BASE = data_root()
 OUTPUT = Path(__file__).resolve().parent / "results" / "spatial_activities"
 GRID_SIZE = 10_000
-MIN_MZ = 10
-MIN_MATSIM = 15
+MIN_MZ = 30
+MIN_MATSIM = 30
 PURPOSES = ("work", "education", "shop", "leisure", "other")
 MZ_PURPOSES = {
     1: "interaction", 2: "work", 3: "education", 4: "shop",
@@ -32,12 +32,8 @@ MZ_PURPOSES = {
 
 
 def find_file(filename, folder):
-    matches = sorted(BASE.rglob(filename))
-    preferred = [p for p in matches if folder.lower() in str(p.parent).lower()]
-    files = preferred or matches
-    if not files:
-        raise FileNotFoundError(f"Missing {filename} in {BASE}")
-    return files[0]
+    from abmt_paths import find_input_file
+    return find_input_file(BASE, filename, folder)
 
 
 def read_boundary():
@@ -78,29 +74,11 @@ def survey_residents(region):
     return people.rename(columns={"alter": "age", "WP": "weight"})
 
 
-def survey_destinations(people, region):
-    ways = pd.read_csv(
-        find_file("wege.csv", "Mikrozensus"), encoding="latin1", dtype={"HHNR": "string"},
-        usecols=["HHNR", "WEGNR", "wzweck1", "wzweck2", "Z_X_CH1903", "Z_Y_CH1903"]
-    )
-    ways = ways.loc[ways.HHNR.isin(people.HHNR)].drop_duplicates(["HHNR", "WEGNR"])
-    ways = ways.merge(people, on="HHNR", validate="many_to_one")
-    columns = ["wzweck1", "wzweck2", "Z_X_CH1903", "Z_Y_CH1903"]
-    ways[columns] = ways[columns].apply(pd.to_numeric, errors="coerce")
-    ways["purpose"] = ways.wzweck1.map(MZ_PURPOSES).fillna("unknown")
-    ways.loc[ways.wzweck2 > 1, "purpose"] = "home"
-    ways = ways.loc[
-        ways.purpose.isin(PURPOSES)
-        & ways.Z_X_CH1903.between(400_000, 900_000)
-        & ways.Z_Y_CH1903.between(0, 400_000)
-    ].copy()
-    converter = Transformer.from_crs(21781, 2056, always_xy=True)
-    xx, yy = converter.transform(ways.Z_X_CH1903.to_numpy(), ways.Z_Y_CH1903.to_numpy())
-    ways["x"], ways["y"] = xx, yy
-    inside = [region.covers(Point(x, y)) for x, y in zip(xx, yy)]
-    return ways.loc[inside, ["HHNR", "age", "weight", "purpose", "x", "y"]].rename(
-        columns={"HHNR": "person_id"}
-    )
+def survey_destinations(people,region):
+    from abmt_common import visit_data
+    a,b=visit_data()
+    return a
+
 
 
 def number(value):
@@ -129,56 +107,10 @@ def activity_type(value):
 
 
 def simulation_destinations(region):
-    records = []
-    path = find_file("neuchatel_population.xml.gz", "Neuchatel_10pct")
-    with gzip.open(path, "rb") as stream:
-        root = None
-        for event, person in ET.iterparse(stream, events=("start", "end")):
-            if root is None:
-                root = person
-            if event != "end" or person.tag.rsplit("}", 1)[-1] != "person":
-                continue
+    from abmt_common import visit_data
+    a,b=visit_data()
+    return b
 
-            attrs = {}
-            for child in person:
-                if child.tag.rsplit("}", 1)[-1] == "attributes":
-                    attrs.update({a.get("name"): (a.text or "").strip() for a in child})
-            excluded = any(
-                str(attrs.get(key, "")).lower() in ("true", "yes", "1")
-                for key in ("isOutside", "isFreight", "isCrossBorder", "isExternalFR")
-            ) or str(attrs.get("subpopulation", "")).lower() in (
-                "freight", "crossborder", "outside"
-            )
-            age = number(attrs.get("age"))
-            x_home = number(attrs.get("home_x") or attrs.get("home_coordinate_x"))
-            y_home = number(attrs.get("home_y") or attrs.get("home_coordinate_y"))
-            if excluded or age is None or not 6 <= age <= 120 or x_home is None or y_home is None:
-                root.clear()
-                continue
-            if not region.covers(Point(x_home, y_home)):
-                root.clear()
-                continue
-
-            plans = [p for p in person if p.tag.rsplit("}", 1)[-1] == "plan"]
-            selected = next(
-                (p for p in plans if p.get("selected", "").lower() in ("yes", "true", "1")),
-                plans[0] if plans else None,
-            )
-            if selected is not None:
-                for activity in selected.iter():
-                    if activity.tag.rsplit("}", 1)[-1] not in ("act", "activity"):
-                        continue
-                    purpose = activity_type(activity.get("type"))
-                    if purpose not in PURPOSES:
-                        continue
-                    x, y = number(activity.get("x")), number(activity.get("y"))
-                    if x is not None and y is not None and region.covers(Point(x, y)):
-                        records.append((person.get("id"), int(age), 1.0, purpose, x, y))
-            root.clear()
-
-    if not records:
-        raise ValueError("No matching MATSim activity destinations")
-    return pd.DataFrame(records, columns=["person_id", "age", "weight", "purpose", "x", "y"])
 
 
 def plot_purposes(mz, sim, cohort):
@@ -217,6 +149,8 @@ def add_grid(df, xmin, ymin, size):
 
 def grid_table(mz, sim, boundary, size):
     xmin, ymin, _, _ = boundary.bounds
+    xmin = np.floor(xmin/size)*size
+    ymin = np.floor(ymin/size)*size
     mz_grid = add_grid(mz, xmin, ymin, size)
     sim_grid = add_grid(sim, xmin, ymin, size)
     mz_counts = mz_grid.groupby(["ix", "iy"]).agg(
@@ -260,6 +194,8 @@ def draw_polygon(ax, geometry, color):
 
 def plot_grid(table, boundary, cohort, size, suffix=""):
     xmin, ymin, xmax, ymax = boundary.bounds
+    xmin = np.floor(xmin/size)*size
+    ymin = np.floor(ymin/size)*size
     cells = {(int(row.ix), int(row.iy)): row for row in table.itertuples(index=False)}
     valid = table.loc[table.comparable]
     maximum_share = max(1.0, float(valid[["mz_share_pct", "sim_share_pct"]].to_numpy().max())) if len(valid) else 1.0
@@ -297,13 +233,13 @@ def plot_grid(table, boundary, cohort, size, suffix=""):
         ax.set_xlim(xmin - pad, xmax + pad)
         ax.set_ylim(ymin - pad, ymax + pad)
         ax.set_aspect("equal")
-        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda value, _: f"{value/1e6:.2f}"))
-        ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda value, _: f"{value/1e6:.2f}"))
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda value, _: f"{value/1000:.1f}"))
+        ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda value, _: f"{value/1000:.1f}"))
         ax.tick_params(labelsize=8)
         ax.set_title(title, fontsize=12)
-        ax.set_xlabel("LV95 Easting (million m)", fontsize=9)
+        ax.set_xlabel("LV95 Easting (km)", fontsize=9)
         if ax is axes[0]:
-            ax.set_ylabel("LV95 Northing (million m)", fontsize=9)
+            ax.set_ylabel("LV95 Northing (km)", fontsize=9)
     fig.colorbar(plt.cm.ScalarMappable(norm=share_norm, cmap=share_colors),
                  ax=axes[:2], shrink=.64, pad=.015,
                  label="Share of all in-bound activity destinations (%)")
@@ -329,14 +265,6 @@ def analyze(mz, sim, boundary, cohort, age_min=6):
         suffix = "" if size == GRID_SIZE else f"_{size // 1000}km"
         public.to_csv(OUTPUT / f"activity_location_grid_{cohort}{suffix}.csv", index=False)
         plot_grid(table, boundary, cohort, size, suffix)
-        if age_min >= 65 and size == GRID_SIZE:
-            comparable = table.loc[table.comparable, ["ix", "iy"]]
-            selected = add_grid(mz, *boundary.bounds[:2], size).merge(
-                comparable, on=["ix", "iy"]
-            )
-            coverage = 100 * selected.weight.sum() / mz.weight.sum()
-            if len(comparable) < 3 or coverage < 70:
-                grid_sizes.append(20_000)
 
 
 def main():

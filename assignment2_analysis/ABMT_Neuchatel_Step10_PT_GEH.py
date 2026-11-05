@@ -1,452 +1,134 @@
-"""Analyse simulated PT boarding patterns and matched road counts (GEH)."""
-
-from __future__ import annotations
-
+"""Inside-stop PT activity/delays and inside-link whole-link GEH from existing outputs."""
 import argparse
-import gzip
-import re
-import xml.etree.ElementTree as ET
+import os
 from pathlib import Path
-from abmt_paths import data_root
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import _abmt_pt as core
+import _abmt_counts_io as io
+from abmt_common import data_root, boundary, output, write_method
 
-DEFAULT_BASE = data_root()
 
-def localname(tag):
-    return str(tag).split("}")[-1]
+def get_sim(base): return io.get_sim(base)
+def geh(model, observed): return io.geh(model, observed)
 
-def read_tabular(path):
 
-    opening = gzip.open if path.suffix == ".gz" else open
-    with opening(path, "rt", encoding="utf-8-sig", errors="replace") as f:
-        first = f.readline()
-    sep = max((";", ",", "\t"), key=lambda x: first.count(x))
-    return pd.read_csv(path, sep=sep, compression="infer", low_memory=False, dtype=str)
+def file_in(candidates):
+    found = [Path(p) for p in candidates if Path(p).is_file()]
+    if not found:
+        raise FileNotFoundError('A required existing simulation file is missing; inspect the paths in README.md.')
+    return found[0]
 
-def get_sim(base):
-    preferred = base / "Neuchatel_10pct" / "simulation_output"
-    if preferred.is_dir():
-        return preferred
-    matches = [p for p in base.rglob("simulation_output") if p.is_dir() and (p / "output_trips.csv.gz").exists()]
-    if len(matches) == 1:
-        return matches[0]
-    raise FileNotFoundError(
-        f"Could not identify one Neuchatel simulation_output directory under {base} (found {len(matches)})."
-    )
 
-def plot_bars(frame, category, measure, title, out, limit=12):
-    frame = frame.sort_values(measure, ascending=False).head(limit)
-    if frame.empty:
-        return
-    fig, ax = plt.subplots(figsize=(10, max(5, len(frame) * 0.35)))
-    ax.barh(frame[category].astype(str), frame[measure])
-    ax.invert_yaxis()
-    ax.set_xlabel(measure.replace("_", " ").title() + " (10% sample, not extrapolated)")
-    ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(out, dpi=180)
-    plt.close(fig)
-
-def pt_analysis(sim, out):
-    path = sim / "pt_passenger_counts.csv.gz"
-    if not path.exists():
-        return None
-    df = read_tabular(path)
-    required = {"line_id", "boardings", "alightings", "time_bin"}
-    if not required.issubset(df.columns):
-        return None
-    for col in ("boardings", "alightings"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["boardings", "alightings"])
-    df = df[(df.boardings >= 0) & (df.alightings >= 0)].copy()
-    df["line_id"] = df["line_id"].fillna("unknown").astype(str)
-    if "line_name" not in df.columns:
-        df["line_name"] = ""
-    df["line_label"] = df.line_id + "  " + df.line_name.fillna("").astype(str)
-    summary = (df.groupby("line_label", as_index=False)
-               .agg(boardings=("boardings", "sum"),
-                    alightings=("alightings", "sum"),
-                    recorded_stop_events=("line_id", "size")))
-    summary = summary.sort_values("boardings", ascending=False)
-    out.mkdir(parents=True, exist_ok=True)
-    summary.to_csv(out / "pt_boardings_by_line.csv", index=False)
-    plot_bars(summary, "line_label", "boardings", "Neuchatel: simulated PT boardings by line", out / "pt_boardings_by_line.png")
-
-    def hour_from_bin(v):
-        m = re.match(r"\s*(\d{1,2}):\d{2}", str(v))
-        return int(m.group(1)) if m else np.nan
-
-    df["hour"] = df["time_bin"].map(hour_from_bin)
-    hourly = (df.dropna(subset=["hour"]).groupby("hour", as_index=False)
-              .agg(boardings=("boardings", "sum"), alightings=("alightings", "sum")))
+def passenger_activity(path, stops, folder):
+    if not path.is_file(): return {'status': 'passenger_count_file_not_supplied'}
+    frame = io.read_tabular(path)
+    if not {'stop_id', 'line_id', 'time_bin', 'boardings', 'alightings'}.issubset(frame):
+        return {'status': 'unexpected_passenger_schema_no_unfiltered_plot_created'}
+    total = len(frame)
+    frame = frame.loc[frame.stop_id.map(lambda s: stops.get(str(s), False))].copy()
+    for key in ['boardings', 'alightings']:
+        frame[key] = pd.to_numeric(frame[key], errors='coerce')
+    good = np.isfinite(frame.boardings) & np.isfinite(frame.alightings) & frame.boardings.ge(0) & frame.alightings.ge(0)
+    invalid = int((~good).sum()); frame = frame.loc[good].copy()
+    byline = frame.groupby('line_id', as_index=False).agg(boardings=('boardings', 'sum'), alightings=('alightings', 'sum'))
+    byline.to_csv(folder/'pt_boardings_by_line.csv', index=False)
+    io.plot_bars(byline, 'line_id', 'boardings', 'Simulated boardings at inside stops by line', folder/'pt_boardings_by_line.png')
+    def hour(v):
+        x = core.seconds(v)
+        return int(x//3600) if x is not None and x >= 0 else None
+    frame['hour'] = frame.time_bin.map(hour)
+    hourly = frame.dropna(subset=['hour']).groupby('hour', as_index=False).agg(boardings=('boardings', 'sum'), alightings=('alightings', 'sum'))
+    hourly.to_csv(folder/'pt_boardings_by_hour.csv', index=False)
     if not hourly.empty:
-        hourly.hour = hourly.hour.astype(int)
-        hourly.to_csv(out / "pt_boardings_by_hour.csv", index=False)
-        fig, ax = plt.subplots(figsize=(9, 4.8))
-        ax.plot(hourly.hour, hourly.boardings, marker="o", label="Boardings")
-        ax.plot(hourly.hour, hourly.alightings, marker="s", label="Alightings")
-        ax.set(xlabel="Hour of simulated day", ylabel="Events in 10% sample", title="Neuchatel: PT boarding and alighting patterns")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(out / "pt_boardings_by_hour.png", dpi=180)
-        plt.close(fig)
-    return summary
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.plot(hourly.hour, hourly.boardings, marker='o', label='Boardings')
+        ax.plot(hourly.hour, hourly.alightings, marker='s', label='Alightings')
+        ax.set(xlabel='Hour of simulated day', ylabel='Simulated passenger events', title='PT activity at inside stops')
+        ax.legend(); fig.tight_layout(); fig.savefig(folder/'pt_boardings_by_hour.png', dpi=180); plt.close(fig)
+    return {'status': 'inside_stop_aggregate_simulated_activity', 'file_rows': total, 'inside_valid_rows': len(frame),
+            'inside_invalid_rows': invalid, 'time_unclassified_rows': int(frame.hour.isna().sum())}
 
-def read_config_modules(sim):
-    for p in (sim / "output_config.xml", sim.parent / "neuchatel_config.xml", sim / "output_config_reduced.xml"):
-        if not p.exists():
-            continue
-        try:
-            root = ET.parse(p).getroot()
-            modules = {}
-            for mod in root.iter():
-                if localname(mod.tag) != "module":
-                    continue
-                params = {}
-                for child in mod:
-                    if localname(child.tag) == "param":
-                        params[str(child.get("name", ""))] = str(child.get("value", ""))
-                modules[str(mod.get("name", ""))] = params
-            return p, modules
-        except (ET.ParseError, OSError):
-            continue
-    return None, {}
 
-def iteration_number(p):
-    hits = [int(x) for x in re.findall(r"(?:^|[/\\])it\.(\d+)(?:$|[/\\])", str(p), flags=re.I)]
-    hits += [int(x) for x in re.findall(r"(?:^|[/\\])(\d+)\.countscompare", str(p), flags=re.I)]
-    return max(hits) if hits else -1
+def add_lane_sensitivity(table):
+    table = table.copy()
+    table['model_average_hourly_per_lane'] = table.model_average_hourly_link_vehicles/table.comparison_lanes
+    table['observed_average_hourly_per_lane'] = table.observed_average_hourly_link_vehicles/table.comparison_lanes
+    table['geh_average_hourly_per_lane'] = [core.geh(float(a), float(b)) if pd.notna(a) and pd.notna(b) else np.nan
+        for a, b in zip(table.model_average_hourly_per_lane, table.observed_average_hourly_per_lane)]
+    return table
 
-def find_countscompare(sim):
-    files = []
-    for p in sim.rglob("*"):
-        name = p.name.lower()
-        if p.is_file() and "countscompare" in name and name.endswith((".txt", ".csv", ".tsv")):
-            files.append(p)
-    hourly = [p for p in files if not ("awtv" in p.name.lower() or "daily" in p.name.lower())]
-    daily = [p for p in files if p not in hourly]
-    hourly.sort(key=lambda p: (iteration_number(p), str(p)))
-    daily.sort(key=lambda p: (iteration_number(p), str(p)))
-    return hourly, daily
-
-def normalized(s):
-    return re.sub(r"\s+", " ", str(s).strip().lower())
-
-def read_comparison(path, hourly):
-    df = pd.read_csv(path, sep="\t", dtype=str, encoding="utf-8-sig")
-    if len(df.columns) == 1:
-        df = pd.read_csv(path, sep=r"\s{2,}", engine="python", dtype=str, encoding="utf-8-sig")
-    cols = {normalized(c): c for c in df.columns}
-    essential = ["matsim volumes", "count volumes", "link id"] + (["hour"] if hourly else [])
-    missing = [x for x in essential if x not in cols]
-    if missing:
-        raise ValueError(f"Cannot recognize the MATSim comparison columns: missing {missing}; found {list(df.columns)}")
-    res = pd.DataFrame({
-        "link_id": df[cols["link id"]].astype(str),
-        "station_id": df[cols.get("count station id", cols["link id"])].astype(str),
-        "simulated": pd.to_numeric(df[cols["matsim volumes"]], errors="coerce"),
-        "observed": pd.to_numeric(df[cols["count volumes"]], errors="coerce"),
-    })
-    if hourly:
-        res["hour"] = pd.to_numeric(df[cols["hour"]], errors="coerce")
-        res = res[res.hour.between(1, 24)]
-    res = res.dropna(subset=["simulated", "observed"])
-    res = res[(res.simulated >= 0) & (res.observed >= 0)]
-    if res.empty:
-        raise ValueError("No non-negative matched observed/simulated values found.")
-    if hourly and res.duplicated(["link_id", "hour"]).any():
-        raise ValueError("Duplicate link-hour pairs in countscompare file.")
-    return res
-
-def observed_from_xml(path):
-    rows = []
-    if not path.exists():
-        return pd.DataFrame(columns=["link_id", "station_id", "observed", "n_hours"])
-    with gzip.open(path, "rb") if path.suffix == ".gz" else open(path, "rb") as f:
-        for event, element in ET.iterparse(f, events=("end",)):
-            if localname(element.tag) == "count":
-                link = element.get("loc_id") or element.get("id") or element.get("linkId")
-                station = element.get("cs_id") or element.get("name") or link
-                vals = {}
-                for vol in element.iter():
-                    if localname(vol.tag) != "volume":
-                        continue
-                    try:
-                        h, value = int(vol.get("h")), float(vol.get("val"))
-                    except (TypeError, ValueError):
-                        continue
-                    if 1 <= h <= 24 and np.isfinite(value) and value >= 0:
-                        vals[h] = value
-                if link is not None:
-                    rows.append({"link_id": str(link), "station_id": str(station),
-                                 "observed": sum(vals.values()), "n_hours": len(vals)})
-                element.clear()
-    return pd.DataFrame(rows)
-
-def daily_flow_from_csv(path):
-    if not path.exists():
-        return None
-    df = read_tabular(path)
-    if not {"linkId", "dailyCount"}.issubset(df.columns):
-        return None
-    df = df[["linkId", "dailyCount"]].rename(columns={"linkId": "link_id", "dailyCount": "raw_sample_volume"})
-    df["link_id"] = df.link_id.astype(str)
-    df.raw_sample_volume = pd.to_numeric(df.raw_sample_volume, errors="coerce")
-    return df.dropna(subset=["raw_sample_volume"])
-
-def geh(m, c):
-    m, c = np.asarray(m, dtype=float), np.asarray(c, dtype=float)
-    denom = m + c
-    return np.sqrt(np.divide(2 * (m - c) ** 2, denom,
-                             out=np.zeros(len(m), dtype=float), where=denom > 0))
-
-def write_geh(df, out, source, scope, safe):
-    out.mkdir(parents=True, exist_ok=True)
-    df = df.copy()
-    df["geh"] = geh(df.simulated, df.observed)
-    df["geh_under_5"] = df.geh < 5
-    df.to_csv(out / f"geh_{scope}_by_station.csv", index=False)
-    n, n_links = len(df), df.link_id.nunique()
-    pct = df.geh_under_5.mean() * 100
-    summary = [
-        f"Source: {source}", f"GEH time basis: {scope}", f"Pairs evaluated: {n}",
-        f"Unique counted links: {n_links}", f"Median GEH: {df.geh.median():.3f}",
-        f"GEH under 5: {df.geh_under_5.sum()}/{n} = {pct:.1f}%",
-        f"Evidence status: {'MATSim-paired comparison' if safe else 'PROVISIONAL calibrated-count reconstruction (NOT an independent holdout)'}",
-        "Warning: Hourly and 24-hour GEH values are not interchangeable.",
-        "A good match of traffic counts does not by itself validate PT ridership.",
-    ]
-    (out / "geh_summary.txt").write_text("\n".join(summary)+"\n", encoding="utf-8")
-    fig, ax = plt.subplots(figsize=(6.5, 6))
-    ax.scatter(df.observed, df.simulated, s=12, alpha=0.5)
-    upper = max(1, float(df[["observed", "simulated"]].max().max()) * 1.02)
-    ax.plot([0, upper], [0, upper], "--", linewidth=1)
-    ax.set(xlabel="Measured volume", ylabel="Simulated volume (matched scale)",
-           title=f"Neuchatel: observed versus simulated ({scope})")
-    ax.set_xlim(0, upper)
-    ax.set_ylim(0, upper)
-    fig.tight_layout()
-    fig.savefig(out / "geh_observed_vs_simulated.png", dpi=180)
-    plt.close(fig)
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    ax.hist(df.geh, bins=min(30, max(5, int(np.sqrt(n)))))
-    ax.axvline(5, linestyle="--", label="GEH = 5")
-    ax.set(xlabel=f"GEH ({scope})", ylabel="Number of observations",
-           title="Neuchatel: GEH distribution")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out / "geh_distribution.png", dpi=180)
-    plt.close(fig)
-    return df
-
-def csv_header(path):
-
-    try:
-        opening = gzip.open if path.suffix == ".gz" else open
-        with opening(path, "rt", encoding="utf-8-sig", errors="replace") as f:
-            first = f.readline().strip("\r\n")
-        sep = max((";", ",", "\t"), key=lambda x: first.count(x))
-        return [c.strip().strip('"').lower() for c in first.split(sep)]
-    except (OSError, UnicodeError):
-        return []
-
-def find_reference_counts_csv(sim, configfile, mods):
-    """Use a configured or unambiguous calibration-count file."""
-    base = sim.parent.parent
-    raw_path = mods.get("eqasim:networkCalibration", {}).get("countsFile", "").strip()
-    options = []
-    if raw_path:
-        original = Path(raw_path).expanduser()
-        options += [original]
-        for root in (configfile.parent if configfile else sim.parent, sim.parent, base, base.parent):
-            options.append(root / original)
-        for directory in (sim.parent, base, base.parent):
-            options.append(directory / "network_calibration_files" / original.name)
-        options += list(base.rglob(original.name))
-    def valid(path):
-        if not path.is_file() or path.suffix.lower() not in (".csv", ".gz", ".txt"):
-            return False
-        cols = set(csv_header(path))
-        return (bool(cols & {"linkid", "link_id", "link"})
-                and bool(cols & {"count", "counts"}))
-    for candidate in options:
-        if valid(candidate):
-            return candidate, "configured"
-
-    candidates = []
-    folders = [sim.parent / "network_calibration_files", base / "network_calibration_files"]
-    for f in folders:
-        if f.is_dir():
-            candidates.extend(p for p in f.rglob("*") if p.is_file() and p.suffix.lower() in (".csv", ".txt"))
-    candidates = list(dict.fromkeys(p.resolve() for p in candidates if valid(p)))
-    if len(candidates) == 1:
-        return candidates[0], "unique_calibration_candidate"
-    return None, "ambiguous" if len(candidates) > 1 else "not_found"
-
-def reference_counts_from_csv(path):
-
-    df = read_tabular(path)
-    columns = {str(x).strip().lower(): x for x in df.columns}
-    id_col = next((columns[k] for k in ("linkid", "link_id", "link") if k in columns), None)
-    count_col = next((columns[k] for k in ("count", "counts") if k in columns), None)
-    if id_col is None or count_col is None:
-        raise ValueError("Reference CSV missing required count or link ID columns")
-    raw = df[[id_col, count_col]].copy()
-    raw.columns = ["link_id", "reference_hourly_per_lane"]
-    raw["link_id"] = raw.link_id.astype(str).str.strip()
-    raw.reference_hourly_per_lane = pd.to_numeric(raw.reference_hourly_per_lane, errors="coerce")
-    raw = raw[(raw.reference_hourly_per_lane > 0) & np.isfinite(raw.reference_hourly_per_lane)]
-    raw = raw[raw.link_id.ne("") & raw.link_id.ne("nan")].copy()
-    if raw.duplicated("link_id").any():
-        raise ValueError("Multiple observed counts for the same network link; cannot pick one automatically")
-    return raw
-
-def network_candidates(sim):
-    base = sim.parent
-    paths = [sim / "output_network.xml.gz", sim / "output_network.xml",
-             base / "neuchatel_network.xml.gz", base / "neuchatel_network.xml",
-             base / "network.xml.gz", base / "network.xml"]
-    paths.extend(p for p in base.glob("*network*.xml*") if p not in paths)
-    return [p for p in paths if p.is_file()]
-
-def read_network_lanes(sim, link_ids):
-
-    candidates = network_candidates(sim)
-    if not candidates:
-        return None
-    for path in candidates:
-        result = {}
-        try:
-            opening = gzip.open if path.suffix == ".gz" else open
-            with opening(path, "rb") as f:
-                context = ET.iterparse(f, events=("start", "end"))
-                root = None
-                for event, elem in context:
-                    if root is None:
-                        root = elem
-                    if event != "end":
-                        continue
-                    if localname(elem.tag) == "link":
-                        identifier = elem.get("id")
-                        if identifier in link_ids:
-                            lanes = elem.get("permlanes") or elem.get("lanes")
-                            try:
-                                lanes = float(lanes)
-                                if np.isfinite(lanes) and lanes > 0:
-                                    result[identifier] = lanes
-                            except (ValueError, TypeError):
-                                pass
-                        elem.clear()
-                        if root is not None:
-                            root.clear()
-                if result:
-                    return pd.DataFrame([{"link_id": k, "lanes": v} for k, v in result.items()])
-        except (ET.ParseError, OSError, EOFError):
-            continue
-    return None
-
-def geh_from_eqasim_calibration(sim, out, configfile, mods, daily):
-    """Compare full-sample mean hourly link flows with calibration counts."""
-    if daily is None:
-        return False
-    source, strategy = find_reference_counts_csv(sim, configfile, mods)
-    if source is None:
-        return False
-    eq = mods.get("eqasim", {})
-    flow = mods.get("eqasim:flow", {})
-    try:
-        sample = float(eq["sampleSize"])
-        start = float(flow.get("startTime", "0"))
-        end = float(flow.get("endTime", "86400"))
-        hours = (end - start) / 3600.0
-    except (KeyError, TypeError, ValueError):
-        return False
-    if not (0.0 < sample <= 1.0 and abs(start) < 1e-9 and abs(end - 86400.0) < 1e-9):
-        return False
-    try:
-        ref = reference_counts_from_csv(source)
-        merged = ref.merge(daily, on="link_id", validate="one_to_one")
-        merged = merged[(merged.raw_sample_volume >= 0) & np.isfinite(merged.raw_sample_volume)].copy()
-        if merged.empty:
-            return False
-        lanes = read_network_lanes(sim, set(merged.link_id))
-        if lanes is None:
-            return False
-        matched = merged.merge(lanes, on="link_id", validate="one_to_one")
-        if matched.empty:
-            return False
-        matched["observed"] = matched["reference_hourly_per_lane"]
-        matched["simulated"] = matched["raw_sample_volume"] / (
-            hours * sample * matched["lanes"].clip(lower=1.0)
-        )
-        matched = matched[(matched.observed > 0) & (matched.simulated >= 0)]
-        if matched.empty:
-            return False
-        write_geh(matched[["link_id", "observed", "simulated"]], out,
-                  "eqasim network-calibration count CSV + sampled daily link counts + network lanes",
-                  "mean_hourly_from_24h_calibration", False)
-        return True
-    except (OSError, ValueError, KeyError) as ex:
-        return False
-
-def analyze_geh(sim, out):
-    configfile, mods = read_config_modules(sim)
-    counts_params = mods.get("counts", {})
-    eq_params = mods.get("eqasim", {})
-    flow_params = mods.get("eqasim:flow", {})
-    h, d = find_countscompare(sim)
-    for files, hourly in ((h, True), (d, False)):
-        if not files:
-            continue
-        path = files[-1]
-        try:
-            frame = read_comparison(path, hourly)
-            write_geh(frame, out, str(path.relative_to(sim)), "station_hour" if hourly else "aggregated", True)
-            return
-        except (ValueError, KeyError, OSError):
-            continue
-
-    obs = observed_from_xml(sim / "output_counts.xml.gz")
-    daily = daily_flow_from_csv(sim / "output_traffic_flow_daily_counts.csv")
-    if len(obs) == 0 or daily is None:
-        if geh_from_eqasim_calibration(sim, out, configfile, mods, daily):
-            return
-        return
-    try:
-        sample = float(eq_params["sampleSize"])
-        start = float(flow_params.get("startTime", "0"))
-        end = float(flow_params.get("endTime", "86400"))
-    except (KeyError, ValueError, TypeError):
-        return
-    if not (0 < sample <= 1 and abs(start) < 1e-7 and abs(end - 86400) < 1e-7):
-        return
-    full = obs[obs.n_hours == 24].copy()
-    full = full.merge(daily, on="link_id", how="inner", validate="one_to_one")
-    full = full[(full.observed >= 0) & (full.raw_sample_volume >= 0)].copy()
-    if full.empty:
-        if geh_from_eqasim_calibration(sim, out, configfile, mods, daily):
-            return
-        return
-    full["simulated"] = full.raw_sample_volume / sample
-    write_geh(full, out, "output_counts.xml.gz + output_traffic_flow_daily_counts.csv",
-              "24h_provisional", False)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", type=Path, default=DEFAULT_BASE, help="Local directory containing Neuchatel_10pct")
+    parser.add_argument('--base', type=Path, default=None)
+    parser.add_argument('--simulation-directory', type=Path)
+    parser.add_argument('--observed-counts', type=Path)
+    parser.add_argument('--sample-size', type=float)
     args = parser.parse_args()
-    base = args.base.expanduser().resolve()
-    sim = get_sim(base)
-    out = Path(__file__).resolve().parent / "results" / "pt_geh"
-    out.mkdir(parents=True, exist_ok=True)
-    pt_analysis(sim, out)
-    analyze_geh(sim, out)
-    return 0
+    base = (args.base or data_root()).expanduser().resolve()
+    os.environ['ABMT_DATA_DIR'] = str(base)
+    sim = args.simulation_directory or get_sim(base)
+    folder = output('pt_geh'); region = boundary()
+    cfg, mods = io.read_config_modules(sim)
+    if cfg is None: raise ValueError('No simulation config found; sample and time-window conventions must be verified.')
+    eq = mods.get('eqasim', {}); flow = mods.get('eqasim:flow', {})
+    sample = args.sample_size if args.sample_size is not None else core.number(eq.get('sampleSize'))
+    start = core.seconds(flow.get('startTime', '0')); end = core.seconds(flow.get('endTime', '86400'))
+    if sample is None or not 0 < sample <= 1 or start is None or end is None or not 0 <= start < end:
+        raise ValueError('Invalid or missing sample size/count window in configuration.')
+    target = args.observed_counts; strategy = 'explicit_cli' if target else None
+    if target is None: target, strategy = io.find_reference_counts_csv(sim, cfg, mods)
+    if target is None: raise ValueError('Reference counts are missing or ambiguous; use --observed-counts with the configured file.')
+    targets, target_schema = core.read_targets(target)
+    if not targets: raise ValueError('No valid reference counts.')
+    network = file_in(io.network_candidates(sim))
+    schedule = file_in([sim/'output_transitSchedule.xml.gz', sim/'output_transitSchedule.xml',
+                       sim.parent/'neuchatel_transitSchedule.xml.gz', sim.parent/'neuchatel_transitSchedule.xml'])
+    events = file_in([sim/'output_events.xml.gz', sim/'output_events.xml'])
+    config = core.read_config(cfg, sample, start, end)
+    links = core.read_network(network, targets, region)
+    stops, routes, vehicle_modes, departures = core.read_schedule(schedule, region)
+    daily, daily_schema = core.read_daily(sim/'output_traffic_flow_daily_counts.csv')
+    eligible = {k for k, v in links.items() if v['status'] == 'eligible'}
+    print('Streaming existing events for PT and road-count checks...', flush=True)
+    counts, delays, road, event_audit = core.event_analysis(events, stops, routes, vehicle_modes, departures, eligible, sample, start, end)
+    if event_audit['audit'].get('vehicle_specific_events_out_of_time_order', 0):
+        raise ValueError('Vehicle-specific event order is inconsistent; state-based PT results withheld.')
+    pt = core.pt_summary(counts, delays)
+    table, summary = core.road_summary(targets, links, road, daily, sample, start, end, 'hourly_per_lane', config['count_convention_disagreements'])
+    table = add_lane_sensitivity(table)
+    pt.to_csv(folder/'pt_performance_summary.csv', index=False, float_format='%.8f')
+    table.to_csv(folder/'road_count_comparison.csv', index=False, float_format='%.10f')
+    pd.DataFrame([{k: v for k, v in summary.items() if not isinstance(v, dict)}]).to_csv(folder/'road_count_summary.csv', index=False)
+    usable = table.loc[table.status.eq('eligible') & table.geh_average_hourly_link.notna()]
+    primary = usable[['network_link_id', 'observed_average_hourly_link_vehicles', 'model_average_hourly_link_vehicles', 'geh_average_hourly_link']].rename(
+        columns={'network_link_id': 'link_id', 'observed_average_hourly_link_vehicles': 'observed', 'model_average_hourly_link_vehicles': 'simulated', 'geh_average_hourly_link': 'geh'})
+    primary.to_csv(folder/'geh_mean_hourly_from_24h_calibration_by_station.csv', index=False, float_format='%.10f')
+    lane = usable[['network_link_id', 'observed_average_hourly_per_lane', 'model_average_hourly_per_lane', 'geh_average_hourly_per_lane']].rename(
+        columns={'network_link_id': 'link_id', 'observed_average_hourly_per_lane': 'observed', 'model_average_hourly_per_lane': 'simulated', 'geh_average_hourly_per_lane': 'geh'})
+    lane.to_csv(folder/'geh_hourly_per_lane_sensitivity.csv', index=False, float_format='%.10f')
+    core.plot_pt(pt, folder/'pt_performance.png'); core.plot_road(table, summary, folder/'road_count_comparison.png')
+    activity = passenger_activity(sim/'pt_passenger_counts.csv.gz', stops, folder)
+    cross = core.passenger_file_check(sim/'pt_passenger_counts.csv.gz', stops, counts)
+    supplementary = {'matched_links_n': len(lane), 'median_geh': float(lane.geh.median()) if len(lane) else None,
+        'pct_geh_below_5': float(100*lane.geh.lt(5).mean()) if len(lane) else None}
+    write_method(folder, {'sample_size': sample, 'count_start_s': start, 'count_end_s': end,
+        'road_summary': summary, 'lane_sensitivity_summary': supplementary, 'config': config,
+        'target_schema': target_schema, 'target_selection': strategy, 'daily_count_schema': daily_schema,
+        'events': event_audit, 'passenger_activity': activity, 'passenger_crosscheck': cross,
+        'timetable_scope': {'stops_total': len(stops), 'stops_inside': sum(stops.values())},
+        'reference_unit_assumption': 'Targets interpreted as vehicles/hour/lane following cmdp FlowProcessor. Original dates/day types and exact run source version are not established.'})
+    (folder/'geh_summary.txt').write_text(
+        'Primary: full-scale mean-hourly whole-LINK GEH, inside link midpoints.\n'
+        f'Configured interval: {start:g} to {end:g} seconds; sample fraction {sample:g}.\n'
+        f'Eligible links: {len(primary)}; median GEH: {summary["median_geh"]}; GEH<5: {summary["pct_geh_below_5"]}%.\n'
+        'Per-lane GEH is supplementary and uses a different scale.\n'
+        'Targets may be calibration inputs; no independent holdout or hourly-profile validation established.\n', encoding='utf8')
+    print('Saved PT and whole-link/per-lane GEH aggregate results.', flush=True)
 
-if __name__ == "__main__":
-    main()
+
+if __name__ == '__main__': main()

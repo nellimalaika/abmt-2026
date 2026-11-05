@@ -20,7 +20,7 @@ from ABMT_Neuchatel_Step7_ModeShareDistance import (
 
 OUT = Path(__file__).resolve().parent / "results" / "mode_share_groups"
 AGE_GROUPS = ["6-17", "18-34", "35-64", "65+"]
-CAR_GROUPS = ["0 cars", "1+ cars"]
+CAR_GROUPS = ["0 cars", "1+ cars", "unknown"]
 MIN_MZ_RESPONDENTS = 30
 MIN_MATSIM_PERSONS = 30
 
@@ -42,46 +42,17 @@ def car_category(numbers):
 
 
 def survey_person_attributes(eligible):
-    households = pd.read_csv(
-        find_file("haushalte.csv", "Mikrozensus"), encoding="latin1",
-        dtype={"HHNR": "string"}, usecols=["HHNR", "f30100"],
-    )
-    if households["HHNR"].duplicated().any():
-        raise ValueError("Duplicate Mikrozensus household IDs")
-    people = eligible[["HHNR", "alter", "WP"]].merge(
-        households, on="HHNR", how="left", validate="one_to_one",
-    )
-    people["age_group"] = age_category(people["alter"])
-    people["car_group"] = car_category(people["f30100"])
-    if people["age_group"].isna().any():
-        raise ValueError("Missing age category in survey")
-    return people[["HHNR", "age_group", "car_group"]]
+    from abmt_common import person_attributes
+    a,b=person_attributes()
+    return a.loc[a.HHNR.isin(eligible.HHNR)].copy()
+
 
 
 def synthetic_person_attributes(eligible_ids):
-    records = []
-    with gzip.open(find_file("neuchatel_population.xml.gz", "Neuchatel_10pct"), "rb") as stream:
-        root = None
-        for event, person in ET.iterparse(stream, events=("start", "end")):
-            if root is None:
-                root = person
-            if event != "end" or local_tag(person.tag) != "person":
-                continue
-            pid = str(person.get("id", ""))
-            if pid in eligible_ids:
-                attrs = {
-                    attribute.get("name", ""): (attribute.text or "").strip()
-                    for child in person if local_tag(child.tag) == "attributes"
-                    for attribute in child if local_tag(attribute.tag) == "attribute"
-                }
-                records.append((pid, attrs.get("age"), attrs.get("numberOfCars")))
-            root.clear()
-    people = pd.DataFrame(records, columns=["person", "age", "numberOfCars"])
-    if people.empty or people["person"].duplicated().any():
-        raise ValueError("Missing or duplicated MATSim resident IDs")
-    people["age_group"] = age_category(people["age"])
-    people["car_group"] = car_category(people["numberOfCars"])
-    return people[["person", "age_group", "car_group"]]
+    from abmt_common import person_attributes
+    a,b=person_attributes()
+    return b.loc[b.person.isin(eligible_ids)].copy()
+
 
 
 def compare_by(df_mz, df_sim, group_column, categories):
@@ -113,7 +84,10 @@ def compare_by(df_mz, df_sim, group_column, categories):
                 "comparison_minimum_sample_met": sufficient,
                 "mz_distinct_respondents": mz_people, "matsim_distinct_persons": sim_people,
             })
-    return pd.DataFrame(rows), pd.DataFrame(coverage)
+    result, support = pd.DataFrame(rows), pd.DataFrame(coverage)
+    if int(support.mz_trip_count.sum()) != len(df_mz) or int(support.matsim_trip_count.sum()) != len(df_sim):
+        raise AssertionError("A demographic/spatial/time partition lost or duplicated primary trips.")
+    return result, support
 
 
 def plot_pt(table, categories, dimension, title):
@@ -179,6 +153,8 @@ def main():
     for dimension, categories, title in (
         ("age_group", AGE_GROUPS, "Age group"),
         ("car_group", CAR_GROUPS, "Household car ownership"),
+        ("personal", ["available","unavailable","unknown"], "Personal car availability"),
+        ("personal_always_only", ["available","unavailable","unknown"], "Always-only car availability sensitivity"),
     ):
         results, coverage = compare_by(mz, sim, dimension, categories)
         results.to_csv(OUT / f"mode_share_by_{dimension}.csv", index=False, float_format="%.6f")
@@ -201,3 +177,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    from abmt_common import write_method, output
+    write_method(output('mode_share_groups'))

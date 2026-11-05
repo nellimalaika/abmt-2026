@@ -1,0 +1,19 @@
+Reconciled update, 5 November 2026
+
+- Retained Nelli's named Step2-Step13 entry points, age classes and 10 km scale.
+- Removed blanket outside/cross-border person exclusions from resident comparisons.
+- Added shared substantive-trip reconstruction and one conditional primary mode selection across Steps6-9.
+- Retained eqasim mode/passenger convention; added strict passenger sensitivity and exclusion/weight audits.
+- Added personal car access alongside household ownership and always-only sensitivity.
+- Kept home-only, true zero internal trips, outside travel and unknown diaries distinct.
+- Replaced simulation-output trip frequency with synthetic selected-input-plan frequency.
+- Repaired unconditional initial-home assumption and initial-activity destination counting.
+- Unified raster alignment and 30-distinct-contributor support; removed automatic 20 km fallback.
+- Added whole-link event-derived GEH with per-lane supplementary GEH and daily-file reconciliation.
+- Added inside-stop timetable diagnostics to inside-stop line/time passenger activity.
+- Replaced the old GEH audit with tests of both saved scales and link-set consistency.
+- Added run_all.py, fresh full-run output archiving, shared helpers and artificial regression tests.
+
+Use the complete directory, including all helper files. See README.md for changed output schemas and input requirements.
+
+Revision 1.1: fixed recursive-input ambiguity. Canonical boundary, survey, population and simulation folders take precedence over backups. Shared resolver used by all Step-level find_file helpers. Added 12 input-path regression tests, including physical-file alias handling. No statistical definitions changed.

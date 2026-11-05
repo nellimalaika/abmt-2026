@@ -20,11 +20,8 @@ AGE_LABELS = ["6-17", "18-34", "35-64", "65+"]
 
 
 def find_file(filename, folder):
-    files = [p for p in BASE.rglob(filename) if p.is_file()]
-    preferred = [p for p in files if folder.lower() in str(p.parent).lower()]
-    if not files:
-        raise FileNotFoundError(f"File not found: {filename}")
-    return (preferred or files)[0]
+    from abmt_paths import find_input_file
+    return find_input_file(BASE, filename, folder)
 
 
 def read_boundary():
@@ -80,9 +77,10 @@ def read_microcensus(boundary):
 
 
 def car_group(value):
-    if pd.isna(value) or value < 0:
-        return None
-    return "1+ cars" if value >= 1 else "0 cars"
+    from _abmt_age import car_count_status
+    status=car_count_status(value)
+    return "0 cars" if status=="0_cars" else "1+ cars" if status=="1plus_cars" else None
+
 
 
 def as_number(value):
@@ -116,23 +114,23 @@ def read_population(boundary):
 
             external = any(
                 str(attrs.get(flag, "")).strip().lower() in ("true", "yes", "1")
-                for flag in ("isFreight", "isOutside", "isCrossBorder", "isExternalFR")
+                for flag in ("isFreight",)
             ) or str(attrs.get("subpopulation", "")).strip().lower() in (
-                "outside", "freight", "crossborder"
+                "freight",
             )
-            if external:
+            if external or str(attrs.get("type", "")).casefold() == "truck":
                 root.clear()
                 continue
 
-            x = as_number(attrs.get("home_x"))
-            y = as_number(attrs.get("home_y"))
+            x = as_number(attrs.get("home_coordinate_x"))
+            y = as_number(attrs.get("home_coordinate_y"))
             if x is None or y is None:
-                x = as_number(attrs.get("home_coordinate_x"))
-                y = as_number(attrs.get("home_coordinate_y"))
+                x = as_number(attrs.get("home_x"))
+                y = as_number(attrs.get("home_y"))
             age = as_number(attrs.get("age"))
             if (
                 x is not None and y is not None and 1_000_000 < x < 4_000_000
-                and boundary.covers(Point(x, y)) and age is not None and 6 <= age <= 120
+                and boundary.covers(Point(x, y)) and age is not None and 6 <= age <= 120 and age.is_integer()
             ):
                 sex = {"m": "male", "f": "female", "male": "male", "female": "female"}.get(
                     attrs.get("sex", "").lower()
@@ -184,3 +182,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    from abmt_common import write_method, output
+    write_method(output('boundary_matched'))
+    from abmt_common import run_car_access
+    run_car_access()

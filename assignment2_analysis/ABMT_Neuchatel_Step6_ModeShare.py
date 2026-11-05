@@ -43,13 +43,8 @@ def local_tag(tag):
 
 
 def find_file(name, preferred):
-    files = sorted(path for path in BASE.rglob(name) if path.is_file())
-    matching = [path for path in files if preferred.casefold() in str(path.parent).casefold()]
-    if matching:
-        files = matching
-    if not files:
-        raise FileNotFoundError(f"Missing {name} in {BASE}")
-    return files[0]
+    from abmt_paths import find_input_file
+    return find_input_file(BASE, name, preferred)
 
 
 def load_boundary():
@@ -70,65 +65,17 @@ def load_boundary():
 
 
 def read_survey_residents(boundary):
-    households = pd.read_csv(
-        find_file("haushalte.csv", "Mikrozensus"), encoding="latin1",
-        dtype={"HHNR": "string"}, usecols=["HHNR", "W_X_CH1903", "W_Y_CH1903"],
-    )
-    respondents = pd.read_csv(
-        find_file("zielpersonen.csv", "Mikrozensus"), encoding="latin1",
-        dtype={"HHNR": "string"}, usecols=["HHNR", "alter", "tag", "WP"],
-    )
-    if households["HHNR"].duplicated().any() or respondents["HHNR"].duplicated().any():
-        raise ValueError("Duplicate Mikrozensus person IDs")
-    people = respondents.merge(households, on="HHNR", validate="one_to_one")
-    for column in ("alter", "tag", "WP", "W_X_CH1903", "W_Y_CH1903"):
-        people[column] = pd.to_numeric(people[column], errors="coerce")
-    people = people.loc[
-        people["alter"].between(6, 120)
-        & people["tag"].between(1, 5)
-        & people["WP"].gt(0)
-        & people["W_X_CH1903"].between(400_000, 900_000)
-        & people["W_Y_CH1903"].between(0, 400_000)
-    ].copy()
-    if people.empty:
-        raise ValueError("No eligible Mikrozensus respondents")
-    transformer = Transformer.from_crs("EPSG:21781", "EPSG:2056", always_xy=True)
-    x, y = transformer.transform(people["W_X_CH1903"].to_numpy(), people["W_Y_CH1903"].to_numpy())
-    inside = [boundary.covers(Point(float(a), float(b))) for a, b in zip(x, y)]
-    people = people.loc[inside, ["HHNR", "alter", "WP"]].copy()
-    if people.empty:
-        raise ValueError("No eligible respondents inside the study area")
-    return people
+    from abmt_common import survey_people
+    return survey_people(boundary)
+
 
 
 def read_survey_trips(eligible):
-    trips = pd.read_csv(
-        find_file("wege.csv", "Mikrozensus"), encoding="latin1",
-        dtype={"HHNR": "string", "WEGNR": "string"},
-        usecols=["HHNR", "WEGNR", "wmittel"],
-    )
-    trips = trips.loc[trips["HHNR"].isin(eligible["HHNR"])].copy()
-    if trips.duplicated(["HHNR", "WEGNR"]).any():
-        raise ValueError("Duplicate Mikrozensus trip IDs")
-    trips = trips.merge(eligible[["HHNR", "WP"]], on="HHNR", validate="many_to_one")
-    trips["mode"] = pd.to_numeric(trips["wmittel"], errors="coerce").map(MZ_MODE_MAP)
+    from abmt_common import mode_data
+    mz,sim,report = mode_data()
+    mz = mz.loc[mz.HHNR.isin(eligible.HHNR)].copy()
+    return mz,report["survey_internal_n"],report["survey_excluded_primary_n"]
 
-    stages = pd.read_csv(
-        find_file("etappen.csv", "Mikrozensus"), encoding="latin1",
-        dtype={"HHNR": "string", "WEGNR": "string"},
-        usecols=["HHNR", "WEGNR", "f51300"],
-    )
-    passengers = stages.loc[
-        pd.to_numeric(stages["f51300"], errors="coerce").eq(8), ["HHNR", "WEGNR"]
-    ].drop_duplicates()
-    passengers["passenger"] = True
-    trips = trips.merge(passengers, on=["HHNR", "WEGNR"], how="left", validate="many_to_one")
-    trips.loc[trips["passenger"].eq(True), "mode"] = "car_passenger"
-
-    valid = trips.loc[trips["mode"].isin(MODES), ["HHNR", "WP", "mode"]].copy()
-    if valid.empty:
-        raise ValueError("No valid Mikrozensus trips")
-    return valid, len(trips), len(trips) - len(valid)
 
 
 def to_float(value):
@@ -144,32 +91,9 @@ def bool_flag(value):
 
 
 def read_sim_resident_ids(boundary):
-    ids = set()
-    with gzip.open(find_file("neuchatel_population.xml.gz", "Neuchatel_10pct"), "rb") as stream:
-        root = None
-        for event, person in ET.iterparse(stream, events=("start", "end")):
-            if root is None:
-                root = person
-            if event != "end" or local_tag(person.tag) != "person":
-                continue
-            attrs = {
-                attribute.get("name", ""): (attribute.text or "").strip()
-                for child in person if local_tag(child.tag) == "attributes"
-                for attribute in child if local_tag(attribute.tag) == "attribute"
-            }
-            external = any(bool_flag(attrs.get(flag)) for flag in (
-                "isOutside", "isFreight", "isExternalFR", "isCrossBorder"
-            )) or attrs.get("subpopulation", "").casefold() in {"outside", "freight", "crossborder"}
-            age = to_float(attrs.get("age"))
-            x = to_float(attrs.get("home_x") or attrs.get("home_coordinate_x"))
-            y = to_float(attrs.get("home_y") or attrs.get("home_coordinate_y"))
-            if not external and age is not None and 6 <= age <= 120 and x is not None and y is not None:
-                if boundary.covers(Point(x, y)):
-                    ids.add(str(person.get("id", "")))
-            root.clear()
-    if not ids:
-        raise ValueError("No eligible MATSim residents")
-    return ids
+    from abmt_common import resident_ids
+    return resident_ids(boundary)
+
 
 
 def read_csv_header(path):
@@ -193,37 +117,11 @@ def classify_sim_mode(value):
 
 
 def read_sim_trips(resident_ids):
-    path = find_file("output_trips.csv.gz", "simulation_output")
-    columns, delimiter = read_csv_header(path)
-    person_col = next((name for name in ("person", "person_id", "personId") if name in columns), None)
-    mode_col = next((name for name in ("main_mode", "mainMode", "mode") if name in columns), None)
-    if not person_col or not mode_col:
-        raise ValueError("MATSim trips need person and mode columns")
-    activity_cols = [name for name in ("start_activity_type", "end_activity_type") if name in columns]
-    trips = pd.read_csv(
-        path, sep=delimiter, compression="gzip", dtype={person_col: "string"},
-        usecols=[person_col, mode_col] + activity_cols, low_memory=False,
-    )
-    total_rows = len(trips)
-    trips = trips.loc[trips[person_col].isin(resident_ids)].copy()
-    if trips.empty:
-        raise ValueError("No MATSim trips for eligible residents")
-    outside_activity = pd.Series(False, index=trips.index)
-    for column in activity_cols:
-        outside_activity |= trips[column].fillna("").astype(str).str.lower().str.contains(
-            r"outside|crossborder|freight|^border", regex=True,
-        )
-    trips = trips.loc[~outside_activity].copy()
-    trips["mode"] = trips[mode_col].map(classify_sim_mode)
-    excluded_outside = int(trips["mode"].eq("outside").sum())
-    excluded_special = int(trips["mode"].isin({"special_loop", "special_remote"}).sum())
-    unknown = trips.loc[trips["mode"].eq("unknown"), mode_col]
-    if not unknown.empty:
-        raise ValueError(f"Unrecognized MATSim modes: {unknown.unique().tolist()}")
-    trips = trips.loc[trips["mode"].isin(MODES), ["mode"]].copy()
-    if trips.empty:
-        raise ValueError("No valid ordinary MATSim trips")
-    return trips, total_rows, excluded_outside, excluded_special
+    from abmt_common import mode_data
+    mz,sim,report = mode_data()
+    sim = sim.loc[sim.person.isin(resident_ids)].copy()
+    return sim,report["simulation_internal_n"],report["simulation_excluded_primary_n"],report["simulation_loop_n"]
+
 
 
 def weighted_mode_share(frame, weight_column):
@@ -247,36 +145,23 @@ def plot_comparison(table):
 
 
 def main():
-    OUT.mkdir(parents=True, exist_ok=True)
-    boundary = load_boundary()
-    survey_people = read_survey_residents(boundary)
-    survey_trips, mz_total, mz_unknown = read_survey_trips(survey_people)
-    sim_people = read_sim_resident_ids(boundary)
-    sim_trips, sim_total, sim_outside, sim_special = read_sim_trips(sim_people)
-
-    survey = weighted_mode_share(survey_trips.rename(columns={"WP": "weight"}), "weight")
-    simulated = weighted_mode_share(sim_trips.assign(weight=1.0), "weight")
-    table = pd.DataFrame({
-        "mode": MODES,
-        "microcensus_weighted_pct": survey.to_numpy(),
-        "matsim_pct": simulated.to_numpy(),
-    })
-    table["difference_pp"] = table["matsim_pct"] - table["microcensus_weighted_pct"]
-    table = table.round(3)
-    table.to_csv(OUT / "mode_share_aggregated.csv", index=False)
+    from abmt_common import mode_data, write_method
+    OUT.mkdir(parents=True,exist_ok=True)
+    mz,sim,report = mode_data()
+    survey = weighted_mode_share(mz,"WP")
+    model = weighted_mode_share(sim.assign(weight=1.),"weight")
+    table = pd.DataFrame({"mode": MODES,"microcensus_weighted_pct":survey.reindex(MODES).to_numpy(),
+                          "matsim_pct":model.reindex(MODES).to_numpy()})
+    table["difference_pp"] = table.matsim_pct-table.microcensus_weighted_pct
+    table.to_csv(OUT/"mode_share_comparison.csv",index=False)
     plot_comparison(table)
+    for definition in ["eqasim","strict"]:
+        a,b,_ = mode_data(definition)
+        x=weighted_mode_share(a,"WP"); y=weighted_mode_share(b.assign(weight=1.),"weight")
+        pd.DataFrame({"mode":MODES,"microcensus_weighted_pct":x.reindex(MODES).to_numpy(),
+                      "matsim_pct":y.reindex(MODES).to_numpy()}).to_csv(OUT/f"mode_share_{definition}.csv",index=False)
+    write_method(OUT,report)
 
-    notes = [
-        "Trip-based main-mode shares, Neuchatel residents aged 6–120.",
-        "Mikrozensus: weekdays, respondent weight WP per trip.",
-        "MATSim: 10% population sample, unweighted.",
-        "Artificial outside, freight, cross-border and special modes excluded.",
-        "Zero-trip residents do not contribute to trip-based shares.",
-        "Step 7 additionally filters trips by valid straight-line distance > 1 m.",
-        f"Mikrozensus: {len(survey_people)} residents; {len(survey_trips)} valid trips; {mz_unknown}/{mz_total} unknown modes.",
-        f"MATSim: {len(sim_people)} residents; {len(sim_trips)} valid trips; {sim_outside} outside modes; {sim_special} special modes; {sim_total} total output rows.",
-    ]
-    (OUT / "mode_share_methodology.txt").write_text("\n".join(notes) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
