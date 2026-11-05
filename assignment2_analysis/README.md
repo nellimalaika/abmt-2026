@@ -1,6 +1,6 @@
 # Neuchatel — reconciled Assignment 2 code
 
-Updated 5 November 2026, revision 1.2. This package implements the decisions agreed for Nelli's analysis. It combines reviewed population/trip readers with Nelli's analysis layout and step names, including Hatim's PT subscription and common-reference residential-accessibility analyses. It contains code and artificial regression-test generators only; no original survey records, population records, events or generated study results are included.
+Documentation updated 6 November 2026 for the reconciled revision 1.2 analysis and the compact-figure update. This package implements the decisions agreed for Nelli's analysis. It combines reviewed population/trip readers with Nelli's analysis layout and step names, including Hatim's PT subscription and common-reference residential-accessibility analyses. It contains code and artificial regression-test generators only; no original survey records, population records, events or generated study results are included.
 
 ## Install and run
 
@@ -24,10 +24,10 @@ Agentbased/
 
 ```bash
 python -m pip install -r requirements.txt
-python run_all.py --base ../../neuchatel-data
+python run_all.py
 ```
 
-Use the actual data-directory path if yours differs. `neuchatel_data` with an underscore also works when explicitly passed. Automatic directory detection supports both spellings next to the repository. Alternatively set `ABMT_DATA_DIR` to the absolute data-directory path. The scripts use the provided simulation outputs; they never start MATSim.
+To specify a data directory explicitly, use `python run_all.py --base ../../neuchatel-data` with the actual path. `neuchatel_data` with an underscore also works when explicitly passed. Automatic directory detection supports both spellings next to the repository. Alternatively set `ABMT_DATA_DIR` to the absolute data-directory path. The scripts use the provided simulation outputs; they never start MATSim.
 
 A complete `run_all.py` execution runs **Steps2–15**, preserves an existing `results` directory as `results_previous_TIMESTAMP` and writes a fresh output set. This prevents earlier definitions from being mixed with new figures. A partial execution updates only the selected steps:
 
@@ -105,6 +105,43 @@ Step3's municipality-type charts use the matched-municipality subset and report 
 
 Step14 additionally requires person questionnaire fields `f41610d` (route pass) and `f41610f` (Junior/Enkel); the shared reader already loads `f41610a/b/c`. Step15 additionally requires household `W_OeV_KLASSE`. An absent synthetic `subscriptions` or `ovgk` attribute is retained as unknown, rather than dropping the resident. All linking identifiers and coordinates stay in local memory.
 
+## Refresh the figure style without rerunning analyses
+
+From `assignment2_analysis`:
+
+```bash
+python refresh_plot_style.py
+```
+
+The script reads nine saved aggregate CSVs and redraws **eight PNG figures**:
+
+| Analysis | Figures refreshed |
+|---|---|
+| PT subscriptions | Main grouping and three-item sensitivity |
+| Common accessibility | Supplied/common class comparison and 10 km maps |
+| Household ownership and personal access | Main definition and always-only sensitivity |
+| PT and road diagnostics | Timetable performance and road-count comparison |
+
+Only the public study boundary is needed in addition to the saved CSVs. Survey/person records, events and ARE accessibility polygons are not reloaded. The existing CSVs and analysis method JSONs remain unchanged. The script overwrites the eight corresponding PNGs and writes `results/plot_style_method.json` with display notes and source-CSV checksums.
+
+Data and result locations can be specified explicitly:
+
+```bash
+python refresh_plot_style.py --base ../../neuchatel-data
+python refresh_plot_style.py --results /path/to/existing/results
+```
+
+The required Step2,10,14,15 aggregates must already exist. The saved grid must match the current study boundary. The script stops with an explanatory error when these prerequisites are missing or inconsistent.
+
+The four updated helpers are `_abmt_car.py`, `_abmt_pt.py`, `_abmt_subscriptions.py` and `_abmt_accessibility.py`. Regular Step runs use the same drawing functions.
+
+### Figure conventions
+
+- Resident-comparison bars: Mikrozensus **blue `#1f77b4`**, MATSim **orange `#ff7f0e`**.
+- The common-accessibility maps retain the original palettes: **`YlOrRd`** for both absolute rates and **`RdBu_r`** for MATSim minus Mikrozensus. Both absolute panels use the same 0–100% scale; the difference scale is centred on zero.
+- Titles and category labels are shorter, and long explanation blocks have been moved out of figures. Essential denominators, reference years and support rules remain identifiable; full methods remain in the method JSONs and this README.
+- Numerical results, cohorts, category definitions, weights, the 10 km lattice, support masks and GEH conventions are unchanged by the styling update.
+
 ## Collect the regenerated outputs
 
 After a successful complete run, from `assignment2_analysis`:
@@ -113,7 +150,9 @@ After a successful complete run, from `assignment2_analysis`:
 python collect_review.py
 ```
 
-This creates the ignored local `assignment2_review.zip`, containing only generated CSVs, PNG figures and method JSONs from the fresh `results/` directory. It excludes inputs, the reference cache and previous output archives. Share the ZIP through the agreed private review channel; keep it out of Git. Do not revise the report until the regenerated aggregate results have been reviewed.
+This creates the ignored local `assignment2_review.zip`, containing only generated CSVs, PNG figures and method JSONs from the fresh `results/` directory. It excludes inputs, the reference cache and previous output archives. Review the archive contents before sharing through the agreed private channel, and keep it out of Git. Use tables, figures and methods from the same output set when preparing the paper.
+
+The collector selects CSVs, PNGs and JSON filenames containing `method` from `results/`; it does not assess data-sharing permissions. Use it with the aggregate-only outputs produced by these scripts.
 
 For the two new analyses, review `pt_subscriptions_comparison.csv/.png`, `pt_subscriptions_sensitivity.csv/.png`, `survey_subscription_mapping_transitions.csv` and `pt_subscriptions_method.json`; then all CSVs/PNGs and `pt_accessibility_common_method.json` in `results/pt_accessibility_common/`, especially both class-transition tables, the combined supplied/common comparison, grid contributor counts/display masks and method coverage.
 
@@ -129,8 +168,9 @@ The complete Steps2–15 workflow is checked against an artificial population/ne
 
 ## Provenance
 
-The named step scripts and retained plotting/config helpers originate from Nelli's `nellimalaika/abmt-2026`, initially inspected commit `ad3d05911c3ea1141fb034abb9b7db19836886fc`; this integration uses current upstream `86c5f46f3d3f715377166ebc8b014c49c1c03d0f`. Internal `_abmt_*` modules adapt the reviewed Hatim `validate_*` snapshots. They are combined explicitly in this reconciled version; no claim of an independent second implementation is made. These source snapshots need not contain every uncommitted change in either local working copy. The PT extensions' exact supplied snapshots and integration adaptations are documented separately in `PT_PROVENANCE.md`.
+The named step scripts and retained plotting/config helpers originate from Nelli's `nellimalaika/abmt-2026`, initially inspected commit `ad3d05911c3ea1141fb034abb9b7db19836886fc`; the PT integration was built on upstream `86c5f46f3d3f715377166ebc8b014c49c1c03d0f`. Internal `_abmt_*` modules adapt the reviewed Hatim `validate_*` snapshots. They are combined explicitly in this reconciled version; no claim of an independent second implementation is made. These source snapshots need not contain every uncommitted change in either local working copy. The PT extensions' exact supplied snapshots and integration adaptations are documented separately in `PT_PROVENANCE.md`.
 
 The original generation pipeline sometimes reconstructs detailed loop trips from stages; this package does not claim exact row-by-row equivalence to every generation transformation. The scope and loop exclusions of the primary analysis are therefore explicit, and coverage audits must be inspected before interpreting differences.
 
-Keep private inputs and generated study outputs out of Git. The supplied `.gitignore` protects these file types; inspect staged files before committing code changes.
+Keep private inputs and generated study outputs out of Git. The supplied `.gitignore` excludes these file types when untracked; it does not remove files already tracked by Git. Inspect `git diff --cached --name-only` before committing code changes.
+
